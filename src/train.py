@@ -180,6 +180,8 @@ def train():
     print(f"Training on device: {config.DEVICE}")
     
     # Setup TensorBoard
+    if not os.path.exists("runs"):
+        os.makedirs("runs")     # Create models directory if it doesn't exist
     log_dir = os.path.join("runs", "draft_experiment_" + datetime.now().strftime("%Y%m%d-%H%M%S"))
     writer = SummaryWriter(log_dir=log_dir)
     print(f"TensorBoard logging to: {log_dir}")
