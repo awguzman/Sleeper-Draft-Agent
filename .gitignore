@@ -31,9 +31,12 @@ env/
 .vscode/
 *.swp
 
-# Project Specific - Artifacts
-src/models/
-src/runs/
+# Project Specific
+# Ignore contents of models and runs, but keep the folders and .gitkeep
+src/models/*
+!src/models/.gitkeep
+src/runs/*
+!src/runs/.gitkeep
 *.pth
 
 # Logs
