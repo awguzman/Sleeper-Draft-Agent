@@ -1,5 +1,15 @@
 """
-This module defines the training logic for the drafting agents in the drafting simulation.
+This module defines the training logic for the PPO-based drafting agent.
+
+The core components are:
+- Memory: A buffer to store transitions (state, action, logprob, reward) for a trajectory.
+- PPO: The Proximal Policy Optimization algorithm implementation. It handles agent policy updates.
+- train: The main function that orchestrates the training process, including:
+    - Initializing the (vectorized) environment, agent, and TensorBoard for logging.
+    - Running training episodes (simulated drafts).
+    - Collecting experiences (transitions) in the Memory buffer.
+    - Periodically updating the agent's policy using the PPO algorithm.
+    - Logging metrics and saving model checkpoints.
 """
 
 import torch
@@ -7,6 +17,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Categorical
 from torch.utils.tensorboard import SummaryWriter
+
 import numpy as np
 import os
 import subprocess
@@ -14,11 +25,18 @@ import webbrowser
 import time
 import socket
 from datetime import datetime
+from functools import partial
+from collections import deque
+
 from draft import DraftSimulator
 from agent import DraftAgent
+from vectorize import VectorizedDraftSimulator
 import config
 
 class Memory:
+    """
+    A buffer for storing trajectories for PPO updates.
+    """
     def __init__(self):
         self.actions = []
         self.states_roster = []
@@ -29,6 +47,7 @@ class Memory:
         self.is_terminals = []
 
     def clear(self):
+        """Clears all stored transitions."""
         del self.actions[:]
         del self.states_roster[:]
         del self.states_player[:]
@@ -38,7 +57,11 @@ class Memory:
         del self.is_terminals[:]
 
 class PPO:
+    """
+    Proximal Policy Optimization (PPO) Agent.
+    """
     def __init__(self, n_players_window, player_feat_dim, roster_feat_dim, embed_dim=64):
+        # Initialize hyperparameters
         self.lr = config.LR
         self.gamma = config.GAMMA
         self.eps_clip = config.EPS_CLIP
@@ -52,149 +75,195 @@ class PPO:
         self.policy_old = DraftAgent(n_players_window, player_feat_dim, roster_feat_dim, embed_dim).to(config.DEVICE)
         self.policy_old.load_state_dict(self.policy.state_dict())
 
-        self.MseLoss = nn.MSELoss()
+        # Initialize Critic Loss Function
+        self.Loss = nn.MSELoss()
 
     def select_action(self, roster_feats, player_feats, mask, memory):
         """
-        Selects an action given the state, and stores the transition in memory.
+        Selects a batch of actions given a batch of states, and stores the transitions in memory.
         """
-        # Convert to tensor and add batch dimension
-        roster_feats = roster_feats.unsqueeze(0).to(config.DEVICE)
-        player_feats = player_feats.unsqueeze(0).to(config.DEVICE)
-        mask = mask.unsqueeze(0).to(config.DEVICE)
+        # Move state tensors to the correct device
+        roster_feats = roster_feats.to(config.DEVICE)
+        player_feats = player_feats.to(config.DEVICE)
+        mask = mask.to(config.DEVICE)
 
+        # Use the old policy to generate actions
         with torch.no_grad():
             action_logits, _ = self.policy_old(roster_feats, player_feats, mask)
-        
-        # Create distribution to sample from
-        dist = Categorical(logits=action_logits)
-        action = dist.sample()
-        action_logprob = dist.log_prob(action)
 
-        # Store in memory
+        # Check for all-masked logits (all -inf)
+        # This only happens if the agent has no available actions (e.g. only needs positions not in their current board)
+        # Should be fixed but leaving this until we are sure
+        if (action_logits == float('-inf')).all(dim=1).any():
+            print("!!! ALL ACTIONS MASKED DETECTED !!!")
+            # Find the index of the bad row
+            bad_indices = (action_logits == float('-inf')).all(dim=1).nonzero(as_tuple=True)[0]
+            print(f"Bad indices in batch: {bad_indices}")
+            print(f"Mask for first bad index: {mask[bad_indices[0]]}")
+            raise ValueError("All actions are masked for at least one environment!")
+
+        # Create a categorical distribution and sample actions
+        dist = Categorical(logits=action_logits)
+        actions = dist.sample()
+        action_logprobs = dist.log_prob(actions)
+
+        # Store transitions in memory
         memory.states_roster.append(roster_feats)
         memory.states_player.append(player_feats)
         memory.masks.append(mask)
-        memory.actions.append(action)
-        memory.logprobs.append(action_logprob)
+        memory.actions.append(actions)
+        memory.logprobs.append(action_logprobs)
 
-        return action.item()
+        return actions.cpu().numpy()
 
     def update(self, memory, current_episode):
         """
-        Updates the policy using the PPO algorithm.
-        Returns the average loss for logging.
+        Updates the policy using the collected experiences in memory.
         """
         # --- Decay Hyperparameters ---
-        # Calculate new Learning Rate
         new_lr = config.LR - (config.LR_DECAY_RATE * current_episode)
-        new_lr = max(new_lr, config.LR_FINAL) # Clamp to minimum
-        
-        # Update optimizer learning rate
+        new_lr = max(new_lr, config.LR_FINAL)
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = new_lr
 
-        # Calculate new Entropy Coefficient
         new_entropy_coef = config.ENTROPY_COEF - (config.ENTROPY_DECAY_RATE * current_episode)
-        new_entropy_coef = max(new_entropy_coef, config.ENTROPY_FINAL) # Clamp to minimum
+        new_entropy_coef = max(new_entropy_coef, config.ENTROPY_FINAL)
 
-        # --- Monte Carlo Estimate ---
+        # --- Monte Carlo Estimate of Rewards for Vectorized Environment ---
         rewards = []
         discounted_reward = 0
-        for reward, is_terminal in zip(reversed(memory.rewards), reversed(memory.is_terminals)):
-            if is_terminal:
-                discounted_reward = 0
-            discounted_reward = reward + (self.gamma * discounted_reward)
+
+        # Convert lists of tensors to tensors
+        # Shape: (num_steps, num_envs)
+        mem_rewards = torch.stack(memory.rewards).to(config.DEVICE)
+        mem_terminals = torch.stack(memory.is_terminals).to(config.DEVICE)
+
+        # Compute the discounted reward for each environment's trajectory
+        for step in reversed(range(len(mem_rewards))):
+            # If a step was a terminal state, the discounted reward for the *previous* step is reset to 0
+            discounted_reward = mem_rewards[step] + self.gamma * discounted_reward * (1 - mem_terminals[step].float())
             rewards.insert(0, discounted_reward)
+        
+        # Flatten the rewards tensor
+        # Shape: (num_steps * num_envs)
+        rewards = torch.cat(rewards)
+        
+        # Normalize rewards
+        reward_std = rewards.std()
+        rewards = (rewards - rewards.mean()) / (reward_std + 1e-7)
 
-        # Normalizing the rewards
-        rewards = torch.tensor(rewards, dtype=torch.float32).to(config.DEVICE)
-        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
+        # --- Batch and Flatten Data ---
+        old_states_roster = torch.cat(memory.states_roster).detach()
+        old_states_player = torch.cat(memory.states_player).detach()
+        old_masks = torch.cat(memory.masks).detach()
+        old_actions = torch.cat(memory.actions).detach()
+        old_logprobs = torch.cat(memory.logprobs).detach()
 
-        # Convert list to tensor
-        old_states_roster = torch.squeeze(torch.stack(memory.states_roster, dim=0)).detach().to(config.DEVICE)
-        old_states_player = torch.squeeze(torch.stack(memory.states_player, dim=0)).detach().to(config.DEVICE)
-        old_masks = torch.squeeze(torch.stack(memory.masks, dim=0)).detach().to(config.DEVICE)
-        old_actions = torch.squeeze(torch.stack(memory.actions, dim=0)).detach().to(config.DEVICE)
-        old_logprobs = torch.squeeze(torch.stack(memory.logprobs, dim=0)).detach().to(config.DEVICE)
-
-        total_loss = 0
+        # --- Logging Metrics ---
+        total_loss, total_actor_loss, total_critic_loss, total_entropy_loss = 0, 0, 0, 0
+        total_clip_fraction = 0
+        total_grad_norm = 0
         
         # Optimize policy for K epochs
         for _ in range(self.k_epochs):
-            # Evaluating old actions and values
             logprobs, state_values, dist_entropy = self.evaluate(old_states_roster, old_states_player, old_masks, old_actions)
-            
-            # Finding the ratio (pi_theta / pi_theta__old)
-            ratios = torch.exp(logprobs - old_logprobs)
 
-            # Finding Surrogate Loss
+            # Calculate advantages
             advantages = rewards - state_values.detach()
+
+            # Compute ratio (pi_theta / pi_theta__old)
+            ratios = torch.exp(logprobs - old_logprobs)
+            
+            # Actor Loss with Clipping
             surr1 = ratios * advantages
             surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
+            actor_loss = -torch.min(surr1, surr2).mean()
+            
+            # Critic Loss
+            critic_loss = self.Loss(state_values, rewards)
+            
+            # Entropy Loss
+            entropy_loss = -dist_entropy.mean()
+            
+            # Total Loss
+            loss = actor_loss + 0.5 * critic_loss + new_entropy_coef * entropy_loss
 
-            # Final loss
-            loss = -torch.min(surr1, surr2) + 0.5 * self.MseLoss(state_values, rewards) - new_entropy_coef * dist_entropy.mean()
-
-            # Take gradient step
             self.optimizer.zero_grad()
-            loss.mean().backward()
+            loss.backward()
+            
+            # Clip gradients and calculate norm
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config.GRAD_CLIP)
             self.optimizer.step()
             
-            total_loss += loss.mean().item()
+            # --- Accumulate logging metrics ---
+            total_loss += loss.item()
+            total_actor_loss += actor_loss.item()
+            total_critic_loss += critic_loss.item()
+            total_entropy_loss += entropy_loss.item()
+            total_grad_norm += grad_norm.item()
+            
+            # Calculate clip fraction
+            clipped = ratios.gt(1 + self.eps_clip) | ratios.lt(1 - self.eps_clip)
+            total_clip_fraction += torch.as_tensor(clipped, dtype=torch.float32).mean().item()
 
         # Copy new weights into old policy
         self.policy_old.load_state_dict(self.policy.state_dict())
         
-        return total_loss / self.k_epochs
+        # --- Prepare logging dictionary ---
+        avg_metrics = {
+            "loss": total_loss / self.k_epochs,
+            "actor_loss": total_actor_loss / self.k_epochs,
+            "critic_loss": total_critic_loss / self.k_epochs,
+            "entropy_loss": total_entropy_loss / self.k_epochs,
+            "clip_fraction": total_clip_fraction / self.k_epochs,
+            "grad_norm": total_grad_norm / self.k_epochs,
+            "adv_mean": advantages.mean().item(),
+            "adv_std": advantages.std().item(),
+            "val_mean": state_values.mean().item(),
+            "val_std": state_values.std().item(),
+            "reward_std": reward_std.item(),
+            "lr": new_lr,
+            "entropy_coef": new_entropy_coef
+        }
+        
+        return avg_metrics
 
     def evaluate(self, roster_feats, player_feats, mask, action):
         """
-        Evaluates the action logprobs and state values for the update step.
+        Evaluates action log-probabilities and state values for a batch of states and actions.
         """
         action_logits, state_values = self.policy(roster_feats, player_feats, mask)
         
         dist = Categorical(logits=action_logits)
         action_logprobs = dist.log_prob(action)
+        dist_entropy = dist.entropy()
         
-        return action_logprobs, torch.squeeze(state_values), dist.entropy()
-
-def print_sample_roster(env, episode):
-    """
-    Prints a sample roster from the environment for debugging.
-    """
-    print(f"\n--- Sample Roster (Episode {episode}) ---")
-    # Just print the first team's roster
-    roster = env.rosters[0]
-    for pos in config.POSITIONS:
-        # Format: PlayerName (PickNum)
-        players = [f"{p['Player']} ({p.get('PickNum', 'N/A')})" for p in roster[pos]]
-        print(f"{pos}: {players}")
-    print("----------------------------------------\n")
+        return action_logprobs, torch.squeeze(state_values), dist_entropy
 
 def is_port_in_use(port):
+    """Checks if a local port is already in use."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('localhost', port)) == 0
 
 def train():
-    print(f"Training on device: {config.DEVICE}")
+    """
+    Main training function.
+    """
+    print(f"Training on device: {config.DEVICE} for {config.MAX_EPISODES} episodes (drafts).")
     
-    # Setup TensorBoard
+    # --- Setup TensorBoard for logging ---
     if not os.path.exists("runs"):
-        os.makedirs("runs")     # Create models directory if it doesn't exist
+        os.makedirs("runs")
     log_dir = os.path.join("runs", "draft_experiment_" + datetime.now().strftime("%Y%m%d-%H%M%S"))
     writer = SummaryWriter(log_dir=log_dir)
     print(f"TensorBoard logging to: {log_dir}")
     
-    # Automatic TensorBoard Launch
+    # --- Automatic TensorBoard Launch ---
     if not is_port_in_use(6006):
         try:
             print("Launching TensorBoard...")
-            # Launch TensorBoard in a subprocess
             subprocess.Popen(["tensorboard", "--logdir=runs", "--port=6006"], shell=True)
-            # Give it a moment to start
             time.sleep(3)
-            # Open the browser
             webbrowser.open("http://localhost:6006")
         except Exception as e:
             print(f"Could not launch TensorBoard automatically: {e}")
@@ -202,80 +271,90 @@ def train():
         print("TensorBoard is already running on port 6006.")
         webbrowser.open("http://localhost:6006")
 
-    # Calculate dimensions
+    # --- Initialization ---
     roster_feat_dim = 4 + (config.NUM_TEAMS - 1) * 4
     player_feat_dim = config.PLAYER_FEAT_DIM
-
-    # Initialize Environment and Agent
-    env = DraftSimulator(num_teams=config.NUM_TEAMS, num_rounds=config.NUM_ROUNDS, 
-                         n_players_window=config.N_PLAYERS_WINDOW, roster_limits=config.ROSTER_LIMITS)
     
+    # --- Vectorized Environment ---
+    num_envs = config.NUM_ENVS # Number of parallel drafts
+    env_fn = partial(DraftSimulator,
+                     num_teams=config.NUM_TEAMS,
+                     num_rounds=config.NUM_ROUNDS,
+                     n_players_window=config.N_PLAYERS_WINDOW,
+                     roster_limits=config.ROSTER_LIMITS)
+    
+    vec_env = VectorizedDraftSimulator(env_fn=env_fn, num_envs=num_envs)
+
     ppo_agent = PPO(config.N_PLAYERS_WINDOW, player_feat_dim, roster_feat_dim, config.EMBED_DIM)
     memory = Memory()
 
-    # Training Loop
-    timestep = 0
-    running_reward = 0
-    
-    # Create models directory if it doesn't exist
+    # --- Training Loop ---
+    running_rewards = np.zeros(num_envs)
+    recent_rewards = deque(maxlen=config.LOG_INTERVAL)
+    total_episodes = 0
+    last_log_episode = 0
+    last_save_episode = 0
+
     if not os.path.exists("models"):
         os.makedirs("models")
     
-    for i_episode in range(1, config.MAX_EPISODES + 1):
-        roster_feats, player_feats, mask = env.reset()
-        current_ep_reward = 0
+    (roster_feats, player_feats, mask) = vec_env.reset()
+
+    while total_episodes < config.MAX_EPISODES:
         
-        # Play a full draft
-        for t in range(config.NUM_TEAMS * config.NUM_ROUNDS):
-            timestep += 1
+        # Collect a batch of experiences
+        for _ in range(config.UPDATE_TIMESTEP // num_envs):
+            actions = ppo_agent.select_action(roster_feats, player_feats, mask, memory)
             
-            # Select action
-            action = ppo_agent.select_action(roster_feats, player_feats, mask, memory)
+            (next_roster_feats, next_player_feats, next_mask), rewards, dones, _ = vec_env.step(actions)
             
-            # Execute action
-            next_state, reward, done, _ = env.step(action)
+            memory.rewards.append(rewards)
+            memory.is_terminals.append(dones)
             
-            # Save reward and is_terminal
-            memory.rewards.append(reward)
-            memory.is_terminals.append(done)
+            running_rewards += rewards.numpy()
             
-            current_ep_reward += reward
-            
-            # Update PPO agent
-            if timestep % config.UPDATE_TIMESTEP == 0:
-                avg_loss = ppo_agent.update(memory, i_episode)
-                memory.clear()
-                timestep = 0
-                
-                # Log Loss
-                writer.add_scalar('Training/Loss', avg_loss, i_episode)
-            
-            if done:
-                break
-                
-            # Update state
-            if next_state:
-                roster_feats, player_feats, mask = next_state
+            for i, done in enumerate(dones):
+                if done:
+                    total_episodes += 1
+                    writer.add_scalar('Training/Reward', running_rewards[i], total_episodes)
+                    recent_rewards.append(running_rewards[i])
+                    running_rewards[i] = 0
+
+            roster_feats, player_feats, mask = next_roster_feats, next_player_feats, next_mask
         
-        running_reward += current_ep_reward
+        # Update the policy
+        metrics = ppo_agent.update(memory, total_episodes)
+        memory.clear()
         
-        # Log Reward per Episode
-        writer.add_scalar('Training/Reward', current_ep_reward, i_episode)
+        # Log metrics after each update
+        writer.add_scalar('Loss/Total', metrics["loss"], total_episodes)
+        writer.add_scalar('Loss/Actor', metrics["actor_loss"], total_episodes)
+        writer.add_scalar('Loss/Critic', metrics["critic_loss"], total_episodes)
+        writer.add_scalar('Loss/Entropy', metrics["entropy_loss"], total_episodes)
+        writer.add_scalar('PPO/Clip_Fraction', metrics["clip_fraction"], total_episodes)
+        writer.add_scalar('PPO/Gradient_Norm', metrics["grad_norm"], total_episodes)
+        writer.add_scalar('Debug/Advantage_Mean', metrics["adv_mean"], total_episodes)
+        writer.add_scalar('Debug/Advantage_Std', metrics["adv_std"], total_episodes)
+        writer.add_scalar('Debug/Value_Mean', metrics["val_mean"], total_episodes)
+        writer.add_scalar('Debug/Value_Std', metrics["val_std"], total_episodes)
+        writer.add_scalar('Debug/Reward_Std', metrics["reward_std"], total_episodes)
+        writer.add_scalar('Hyperparameters/Learning_Rate', metrics["lr"], total_episodes)
+        writer.add_scalar('Hyperparameters/Entropy_Coefficient', metrics["entropy_coef"], total_episodes)
         
-        # Console Logging
-        if i_episode % config.LOG_INTERVAL == 0:
-            avg_reward = running_reward / config.LOG_INTERVAL
-            print(f"Episode {i_episode} \t Average Reward: {avg_reward:.2f}")
-            running_reward = 0
+        # --- Logging and Checkpointing based on total episodes ---
+        if total_episodes >= last_log_episode + config.LOG_INTERVAL:
+            avg_reward = np.mean(recent_rewards) if recent_rewards else 0
+            print(f"Episodes: {total_episodes} \t Avg Reward: {avg_reward:.2f} \t Avg Loss: {metrics['loss']:.4f}")
+            writer.add_scalar('Debug/Avg_Reward', avg_reward, total_episodes)
+            last_log_episode = total_episodes
             
-        if i_episode % config.PRINT_ROSTER_INTERVAL == 0:
-            print_sample_roster(env, i_episode)
-            
-        if i_episode % config.SAVE_MODEL_INTERVAL == 0:
-            model_path = os.path.join("models", f'ppo_draft_agent_{i_episode}.pth')
+        if total_episodes >= last_save_episode + config.SAVE_MODEL_INTERVAL:
+            model_path = os.path.join("models", f'ppo_draft_agent_{total_episodes}.pth')
             torch.save(ppo_agent.policy.state_dict(), model_path)
             print(f"Model saved at {model_path}")
+            last_save_episode = total_episodes
             
+    vec_env.close()
     writer.close()
 
 if __name__ == '__main__':

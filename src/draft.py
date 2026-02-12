@@ -2,7 +2,6 @@
 This module initializes the drafting simulation environment used for model training.
 """
 
-import numpy as np
 import polars as pl
 import torch
 
@@ -85,28 +84,37 @@ class DraftSimulator:
         player_vor = player_row['VOR']
         player_value = player_row['Value']
 
-        # 2. Add player to the current team's roster
-        # We convert the row to a dict so we can add the pick number
+        # 2. Check for roster limit violation (Failsafe Triggered)
+        # If the agent picks a player that violates the limit, it means the failsafe in get_state was used.
+        # We apply a penalty but allow the pick.
+        current_count = len(self.rosters[self.current_team_idx][player_pos])
+        limit = self.roster_limits.get(player_pos, 999)
+        
+        penalty = 0
+        if current_count >= limit:
+            penalty = -2.0 # Penalty for backing into a corner
+
+        # 3. Add player to the current team's roster
         player_data = dict(player_row)
         player_data['PickNum'] = f"{self.current_round}.{str((self.current_pick - 1) % self.num_teams + 1).zfill(2)}"
         
         self.rosters[self.current_team_idx][player_pos].append(player_data)
 
-        # 3. Remove player from the available board
+        # 4. Remove player from the available board
         self.available_players = self.available_players.filter(pl.col('fantasypros_id') != player_id)
 
-        # 4. Calculate reward
+        # 5. Calculate reward
         alpha = 1
         beta = 1
-        reward = (alpha * player_vor) + (beta * player_value)
+        reward = (alpha * player_vor) + (beta * player_value) + penalty
 
-        # 5. Advance the draft turn
+        # 6. Advance the draft turn
         self._advance_turn()
 
-        # 6. Check if the draft is over
+        # 7. Check if the draft is over
         done = self.current_round > self.num_rounds
 
-        # 7. Get the state for the *next* team
+        # 8. Get the state for the *next* team
         if not done:
             next_state = self.get_state(self.current_team_idx)
         else:
@@ -179,6 +187,16 @@ class DraftSimulator:
         # Mask all padded slots
         while len(valid_action_mask) < self.n_players_window:
             valid_action_mask.append(True)
+
+        # --- Failsafe: If all actions are masked, unmask everything ---
+        # This prevents the agent from crashing if it has no valid moves in the top N window.
+        # It allows the agent to pick ANY player in the window, effectively overriding the roster limits.
+        if all(valid_action_mask):
+            print("All actions are masked for at least one environment! Activating Failsafe!")
+            # Only unmask the real players, keep padded slots masked
+            num_real_players = len(top_n_players)
+            for i in range(num_real_players):
+                valid_action_mask[i] = False
 
         valid_action_mask_tensor = torch.tensor(valid_action_mask, dtype=torch.bool)
 

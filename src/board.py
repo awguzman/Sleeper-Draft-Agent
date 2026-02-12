@@ -68,12 +68,12 @@ def process_board(board_df: pl.DataFrame) -> pl.DataFrame:
     # Invert and normalize ECR rankings
     max_ecr = board_df['ECR'].max()
     processed_df = board_df.with_columns(
-        (((max_ecr - pl.col('ECR'))/max_ecr)).round(5).alias('Value')
+        ((max_ecr - pl.col('ECR'))/max_ecr).round(5).alias('Value')
     )
 
     ### Compute Value over Replacement (VOR) ###
     # Define replacement cutoffs based on "average" starter (12 team league w/ Starters (QB x1, RB x2, WR x3, TE x1 , FLX x2))
-    replacement_cutoffs = {'QB': 6, 'RB': 16, 'WR': 24, 'TE': 6}
+    replacement_cutoffs = {'QB': 6, 'RB': 12, 'WR': 18, 'TE': 6}
 
     baselines = {}
     for pos, rank in replacement_cutoffs.items():
