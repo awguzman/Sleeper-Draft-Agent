@@ -25,7 +25,7 @@ NUM_HEADS = 4               # Number of attention heads.
 
 # --- PPO Hyperparameters ---
 LR = 0.01                                                   # Learning Rate
-LR_FINAL = 0.001                                            # Final learning rate after decay
+LR_FINAL = 0.0001                                           # Final learning rate after decay
 GAMMA = 0.99                                                # Discount Factor (focus on long-term)
 EPS_CLIP = 0.2                                              # PPO Clip Parameter
 K_EPOCHS = 4                                                # Number of optimization epochs per update
@@ -34,13 +34,17 @@ UPDATE_TIMESTEP = NUM_TEAMS * NUM_ROUNDS * NUM_ENVS         # Update policy ever
 
 # --- Entropy Settings ---
 ENTROPY_COEF = 0.01         # Initial entropy coefficient
-ENTROPY_FINAL = 0.001       # Final entropy coefficient after decay
+ENTROPY_FINAL = 0.0         # Final entropy coefficient after decay
 
 # --- Training Settings ---
-MAX_EPISODES = NUM_ENVS * 1000 * 2      # Total number of episodes (drafts) to train on
+MAX_EPISODES = NUM_ENVS * 1000 * 2              # Total number of episodes (drafts) to train on (Long run)
+LEARNING_PHASE_EPISODES = NUM_ENVS * 1000 * 1   # Number of episodes to decay LR over (Fast convergence)
+
 LOG_INTERVAL = NUM_ENVS                 # Print logs every n episodes (drafts)
 SAVE_MODEL_INTERVAL = NUM_ENVS * 100    # Save model checkpoint every n episodes (drafts)
 
-# --- Calculate (linear) Decay Rates ---
-LR_DECAY_RATE = (LR - LR_FINAL) / MAX_EPISODES
-ENTROPY_DECAY_RATE = (ENTROPY_COEF - ENTROPY_FINAL) / MAX_EPISODES
+# --- Calculate Decay Rates ---
+# We calculate decay to reach FINAL values by LEARNING_PHASE_EPISODES.
+# After that, the values will be clamped to FINAL in train.py.
+LR_DECAY_RATE = (LR - LR_FINAL) / LEARNING_PHASE_EPISODES
+ENTROPY_DECAY_RATE = (ENTROPY_COEF - ENTROPY_FINAL) / LEARNING_PHASE_EPISODES
