@@ -81,7 +81,7 @@ def process_board(board_df: pl.DataFrame) -> pl.DataFrame:
         baselines[pos] = processed_df.filter(pl.col('Pos') == pos)['Value'][rank - 1]
 
     processed_df = processed_df.with_columns(
-        (pl.col('Value') - (pl.col('Pos').replace(baselines).cast(pl.Float64))).alias('VOR')
+        (pl.col('Value') - (pl.col('Pos').replace(baselines).cast(pl.Float64))).round(5).alias('VOR')
     )
 
     return processed_df
