@@ -32,12 +32,9 @@ env/
 *.swp
 
 # Project Specific
-# Ignore contents of models and runs, but keep the folders and .gitkeep
-src/models/*
-!src/models/.gitkeep
+# Ignore contents runs, but keep the folders and .gitkeep
 src/runs/*
 !src/runs/.gitkeep
-*.pth
 
 # Logs
 *.log

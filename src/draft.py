@@ -61,7 +61,8 @@ class DraftSimulator:
         self.current_round = 1
         self.current_pick = 1
         self.current_team_idx = 0
-        return self.get_state(self.current_team_idx)
+        state, _ = self.get_state(self.current_team_idx)
+        return state
 
     def step(self, action):
         """
@@ -116,20 +117,22 @@ class DraftSimulator:
 
         # 8. Get the state for the *next* team
         if not done:
-            next_state = self.get_state(self.current_team_idx)
+            next_state, info = self.get_state(self.current_team_idx)
         else:
             # If done, return a dummy state or None. 
             # Returning the last state is often useful for value estimation.
-            next_state = self.get_state(self.current_team_idx) 
+            next_state, info = self.get_state(self.current_team_idx) 
 
-        return next_state, reward, done, {}
+        return next_state, reward, done, info
 
     def get_state(self, team_idx):
         """
         Constructs the state representation for a given team.
 
         :param team_idx: The index of the team for which to generate the state.
-        :return: A tuple containing (roster_features, player_features, valid_action_mask).
+        :return: A tuple containing (state_tuple, info_dict).
+                 State tuple: (roster_features, player_features, valid_action_mask)
+                 Info dict: {'failsafe_triggered': bool}
         """
         # 1. Get Top N available players
         top_n_players = self.available_players.head(self.n_players_window)
@@ -148,7 +151,7 @@ class DraftSimulator:
             features = [row['VOR'], row['Value']] + pos_one_hot
             player_features.append(features)
         
-        # Pad if fewer than N players are available
+        # Pad if fewer than N players are available (this should never happen)
         # We pad with 0s. The mask will ensure these aren't selected.
         while len(player_features) < self.n_players_window:
             player_features.append([0.0] * (2 + len(self.positions)))
@@ -188,11 +191,10 @@ class DraftSimulator:
         while len(valid_action_mask) < self.n_players_window:
             valid_action_mask.append(True)
 
-        # --- Failsafe: If all actions are masked, unmask everything ---
-        # This prevents the agent from crashing if it has no valid moves in the top N window.
-        # It allows the agent to pick ANY player in the window, effectively overriding the roster limits.
+        # --- Failsafe: If all actions are masked, unmask everything (will punish later) ---
+        failsafe_triggered = False
         if all(valid_action_mask):
-            print("All actions are masked for at least one environment! Activating Failsafe!")
+            failsafe_triggered = True
             # Only unmask the real players, keep padded slots masked
             num_real_players = len(top_n_players)
             for i in range(num_real_players):
@@ -200,7 +202,10 @@ class DraftSimulator:
 
         valid_action_mask_tensor = torch.tensor(valid_action_mask, dtype=torch.bool)
 
-        return roster_features_tensor, player_features_tensor, valid_action_mask_tensor
+        state = (roster_features_tensor, player_features_tensor, valid_action_mask_tensor)
+        info = {'failsafe_triggered': failsafe_triggered}
+        
+        return state, info
 
     def _advance_turn(self):
         """

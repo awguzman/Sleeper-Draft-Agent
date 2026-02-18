@@ -14,7 +14,7 @@ import sys
 import os
 
 # Add the project root to the path so we can import from src
-# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src import config
 from src.agent import DraftAgent
@@ -242,59 +242,3 @@ class SleeperDraftManager:
         valid_action_mask_tensor = torch.tensor(valid_action_mask, dtype=torch.bool)
         
         return roster_features_tensor, player_features_tensor, valid_action_mask_tensor
-
-# --- Debug Zone ---
-if __name__ == '__main__':
-    print("--- Sleeper Draft Agent Debugger ---")
-    
-    # 1. Get Draft ID
-    draft_id = input("Enter Sleeper Draft ID: ").strip()
-    if not draft_id:
-        print("Draft ID is required.")
-        sys.exit(1)
-        
-    # 2. Get Model Path
-    default_model = "../src/models/ppo_draft_agent_64000.pth"
-    model_path = input(f"Enter Model Path (default: {default_model}): ").strip()
-    if not model_path:
-        model_path = default_model
-        
-    if not os.path.exists(model_path):
-        print(f"Error: Model file not found at {model_path}")
-        sys.exit(1)
-
-    # 3. Initialize Manager
-    try:
-        manager = SleeperDraftManager(draft_id, model_path)
-    except Exception as e:
-        print(f"Failed to initialize manager: {e}")
-        sys.exit(1)
-        
-    print(f"\nConnected to draft {draft_id}.")
-    print(f"Initial Board Size: {len(manager.available_players)}")
-    
-    # 4. Interactive Loop
-    while True:
-        cmd = input("\nPress Enter to update state (or 'q' to quit): ").strip().lower()
-        if cmd == 'q':
-            break
-            
-        manager.update_state()
-        
-        # Determine who is on the clock
-        next_pick_num = manager.current_pick_no + 1
-        
-        # Calculate team index for snake draft
-        current_round = ((next_pick_num - 1) // config.NUM_TEAMS) + 1
-        pick_in_round = (next_pick_num - 1) % config.NUM_TEAMS
-        
-        if current_round % 2 == 1:
-            on_clock_idx = pick_in_round
-        else:
-            on_clock_idx = config.NUM_TEAMS - 1 - pick_in_round
-            
-        print(f"On Clock: Team {on_clock_idx + 1} (Round {current_round}, Pick {next_pick_num})")
-        
-        # Get Recommendation
-        rec = manager.get_recommendation(on_clock_idx)
-        print(f"Agent Recommends: {rec['Player']} ({rec['Pos']} - VOR: {rec['VOR']:.2f})")

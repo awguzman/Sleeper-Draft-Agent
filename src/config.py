@@ -12,7 +12,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # --- Environment Settings ---
 NUM_TEAMS = 12
 NUM_ROUNDS = 16                                         # Draft 9 starters + 7 bench players.
-ROSTER_LIMITS = {'QB': 2,'RB': 8,'WR': 8,'TE': 3}       # Max number of players per position.
+ROSTER_LIMITS = {'QB': 2,'RB': 6, 'WR': 8,'TE': 3}      # Max number of players per position.
 POSITIONS = ['QB', 'RB', 'WR', 'TE']                    # Standardize position names.
 NUM_ENVS = 32                                           # Number of parallel environments.
 
@@ -37,11 +37,10 @@ ENTROPY_COEF = 0.01         # Initial entropy coefficient
 ENTROPY_FINAL = 0.0         # Final entropy coefficient after decay
 
 # --- Training Settings ---
-MAX_EPISODES = NUM_ENVS * 1000 * 2              # Total number of episodes (drafts) to train on (Long run)
-LEARNING_PHASE_EPISODES = NUM_ENVS * 1000 * 1   # Number of episodes to decay LR over (Fast convergence)
-
-LOG_INTERVAL = NUM_ENVS                 # Print logs every n episodes (drafts)
-SAVE_MODEL_INTERVAL = NUM_ENVS * 100    # Save model checkpoint every n episodes (drafts)
+LEARNING_PHASE_EPISODES = NUM_ENVS * 1000                           # Number of episodes to decay LR and Entropy over
+REFINEMENT_PHASE_EPISODES = NUM_ENVS * 100                          # Number of episodes to refine exploitation strategy over
+MAX_EPISODES = LEARNING_PHASE_EPISODES + REFINEMENT_PHASE_EPISODES  # Total number of episodes to train on
+LOG_INTERVAL = NUM_ENVS                                             # Print logs every n episodes (drafts)
 
 # --- Calculate Decay Rates ---
 # We calculate decay to reach FINAL values by LEARNING_PHASE_EPISODES.

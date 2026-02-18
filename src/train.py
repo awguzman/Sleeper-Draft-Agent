@@ -149,8 +149,7 @@ class PPO:
         rewards = torch.cat(rewards)
         
         # Normalize rewards
-        reward_std = rewards.std()
-        rewards = (rewards - rewards.mean()) / (reward_std + 1e-7)
+        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
 
         # --- Batch and Flatten Data ---
         old_states_roster = torch.cat(memory.states_roster).detach()
@@ -162,7 +161,6 @@ class PPO:
         # --- Logging Metrics ---
         total_loss, total_actor_loss, total_critic_loss, total_entropy_loss = 0, 0, 0, 0
         total_clip_fraction = 0
-        total_grad_norm = 0
         
         # Optimize policy for K epochs
         for _ in range(self.k_epochs):
@@ -192,7 +190,7 @@ class PPO:
             loss.backward()
             
             # Clip gradients and calculate norm
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config.GRAD_CLIP)
+            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config.GRAD_CLIP)
             self.optimizer.step()
             
             # --- Accumulate logging metrics ---
@@ -200,7 +198,6 @@ class PPO:
             total_actor_loss += actor_loss.item()
             total_critic_loss += critic_loss.item()
             total_entropy_loss += entropy_loss.item()
-            total_grad_norm += grad_norm.item()
             
             # Calculate clip fraction
             clipped = ratios.gt(1 + self.eps_clip) | ratios.lt(1 - self.eps_clip)
@@ -216,12 +213,6 @@ class PPO:
             "critic_loss": total_critic_loss / self.k_epochs,
             "entropy_loss": total_entropy_loss / self.k_epochs,
             "clip_fraction": total_clip_fraction / self.k_epochs,
-            "grad_norm": total_grad_norm / self.k_epochs,
-            "adv_mean": advantages.mean().item(),
-            "adv_std": advantages.std().item(),
-            "val_mean": state_values.mean().item(),
-            "val_std": state_values.std().item(),
-            "reward_std": reward_std.item(),
             "lr": new_lr,
             "entropy_coef": new_entropy_coef
         }
@@ -293,7 +284,9 @@ def train():
     recent_rewards = deque(maxlen=config.LOG_INTERVAL)
     total_episodes = 0
     last_log_episode = 0
-    last_save_episode = 0
+    
+    # Failsafe Counter
+    failsafe_count = 0
 
     if not os.path.exists("models"):
         os.makedirs("models")
@@ -306,7 +299,12 @@ def train():
         for _ in range(config.UPDATE_TIMESTEP // num_envs):
             actions = ppo_agent.select_action(roster_feats, player_feats, mask, memory)
             
-            (next_roster_feats, next_player_feats, next_mask), rewards, dones, _ = vec_env.step(actions)
+            (next_roster_feats, next_player_feats, next_mask), rewards, dones, infos = vec_env.step(actions)
+            
+            # Count failsafes
+            for info in infos:
+                if info.get('failsafe_triggered', False):
+                    failsafe_count += 1
             
             memory.rewards.append(rewards)
             memory.is_terminals.append(dones)
@@ -332,28 +330,25 @@ def train():
         writer.add_scalar('Loss/Critic', metrics["critic_loss"], total_episodes)
         writer.add_scalar('Loss/Entropy', metrics["entropy_loss"], total_episodes)
         writer.add_scalar('PPO/Clip_Fraction', metrics["clip_fraction"], total_episodes)
-        writer.add_scalar('PPO/Gradient_Norm', metrics["grad_norm"], total_episodes)
-        writer.add_scalar('Debug/Advantage_Mean', metrics["adv_mean"], total_episodes)
-        writer.add_scalar('Debug/Advantage_Std', metrics["adv_std"], total_episodes)
-        writer.add_scalar('Debug/Value_Mean', metrics["val_mean"], total_episodes)
-        writer.add_scalar('Debug/Value_Std', metrics["val_std"], total_episodes)
-        writer.add_scalar('Debug/Reward_Std', metrics["reward_std"], total_episodes)
         writer.add_scalar('Hyperparameters/Learning_Rate', metrics["lr"], total_episodes)
         writer.add_scalar('Hyperparameters/Entropy_Coefficient', metrics["entropy_coef"], total_episodes)
-        
+
         # --- Logging and Checkpointing based on total episodes ---
         if total_episodes >= last_log_episode + config.LOG_INTERVAL:
             avg_reward = np.mean(recent_rewards) if recent_rewards else 0
-            print(f"Episodes: {total_episodes} \t Avg Reward: {avg_reward:.2f} \t Avg Loss: {metrics['loss']:.4f}")
-            writer.add_scalar('Debug/Avg_Reward', avg_reward, total_episodes)
+            print(f"Episodes: {total_episodes} \t Avg Reward: {avg_reward:.2f} \t Avg Loss: {metrics['loss']:.4f} \t Failsafes: {failsafe_count}")
+            writer.add_scalar('Training/Average_Reward', avg_reward, total_episodes)
+            writer.add_scalar('Debug/Failsafe_Count', failsafe_count, total_episodes)
+            
             last_log_episode = total_episodes
+            failsafe_count = 0 # Reset counter after logging
             
-        if total_episodes >= last_save_episode + config.SAVE_MODEL_INTERVAL:
-            model_path = os.path.join("models", f'ppo_draft_agent_{total_episodes}.pth')
-            torch.save(ppo_agent.policy.state_dict(), model_path)
-            print(f"Model saved at {model_path}")
-            last_save_episode = total_episodes
-            
+    # Save Final Model with descriptive name
+    final_model_name = f"ppo_draft_agent_{config.NUM_TEAMS}team_{config.NUM_ROUNDS}rounds.pth"
+    final_model_path = os.path.join("models", final_model_name)
+    torch.save(ppo_agent.policy.state_dict(), final_model_path)
+    print(f"Training Complete. Final model saved at {final_model_path}")
+
     vec_env.close()
     writer.close()
 

@@ -14,12 +14,27 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 import sys
 import os
+import glob
 
 # Add project root to path to allow importing from `app` and `src`
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.sleeper import SleeperDraftManager
 from src import config
+
+# --- Helper Functions ---
+def get_available_models(models_dir="../src/models"):
+    """Scans the models directory for .pth files and returns them as dropdown options."""
+    if not os.path.isdir(models_dir):
+        return []
+    
+    # Find all .pth files
+    model_paths = glob.glob(os.path.join(models_dir, "*.pth"))
+    
+    # Format for dropdown: {'label': 'filename.pth', 'value': 'path/to/filename.pth'}
+    options = [{'label': os.path.basename(p), 'value': p} for p in model_paths]
+    
+    return options
 
 # --- Global State ---
 manager: SleeperDraftManager = None
@@ -28,6 +43,24 @@ user_slot: int = None
 # --- App Initialization ---
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
 app.title = "Sleeper Draft Agent"
+
+# --- Markdown Content ---
+explanation_text = """
+The agent is a **Reinforcement Learning (PPO) model** trained to draft a fantasy football team. It learns by simulating 
+tens of thousands of drafts and optimizing its drafting strategy for total team value.
+
+The agent considers two main types of information:
+
+1.  **Player Value (ECR and VOR):** It evaluates available players based on their **Value** (a normalized Expert 
+    Consensus Rank from FantasyPros.com) and **VOR** (Value Over Replacement) which measures a player's impact relative 
+    to a replacement-level player at their position.
+2.  **Your Roster & Opponent Rosters:** It understands what positions you and your opponents have filled, and what 
+    positions are still needed. This helps it identify positional scarcity, avoid over-drafting, and anticipate opponent
+    picks.
+
+The agent's recommendation is a learned balance of these factors, aiming to maximize your team's overall strength given 
+the current draft context. It should not replace the users own judgement.
+"""
 
 # --- Layout ---
 app.layout = dbc.Container([
@@ -43,15 +76,24 @@ app.layout = dbc.Container([
                 dbc.Col([
                     dbc.Label("Sleeper Draft ID"),
                     dbc.Input(id="input-draft-id", placeholder="Enter Draft ID...", type="text"),
-                ], width=6),
+                ], width=4),
                 dbc.Col([
                     dbc.Label("Your Draft Slot (1-12)"),
                     dbc.Input(id="input-user-slot", placeholder="1", type="number", min=1, max=12, value=1),
-                ], width=3),
+                ], width=2),
                 dbc.Col([
-                    dbc.Label("Actions"),
+                    dbc.Label("Select Model"),
+                    dcc.Dropdown(
+                        id='model-dropdown', 
+                        options=get_available_models(), 
+                        placeholder="Select a model...",
+                        style={'color': 'black'}
+                    ),
+                ], width=4),
+                dbc.Col([
+                    dbc.Label(""),
                     dbc.Button("Connect", id="btn-connect", color="primary", className="w-100"),
-                ], width=3, className="d-flex align-items-end"),
+                ], width=2, className="d-flex align-items-end"),
             ]),
             html.Div(id="connection-status", className="mt-2 text-info")
         ])
@@ -61,7 +103,7 @@ app.layout = dbc.Container([
     html.Div(id="main-content", style={"display": "none"}, children=[
         
         # Interval component to trigger updates periodically
-        dcc.Interval(id="interval-component", interval=5000, n_intervals=0), # Polls every 5 seconds
+        dcc.Interval(id="interval-component", interval=10000, n_intervals=0), # Polls every 10 seconds
 
         # Top Row: Live status and the agent's recommendation
         dbc.Row([
@@ -93,7 +135,7 @@ app.layout = dbc.Container([
             # Agent's Window (Top Available Players)
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader(f"Top {config.N_PLAYERS_WINDOW} Available (Agent's View)"),
+                    dbc.CardHeader(f"Top {config.N_PLAYERS_WINDOW} Available"),
                     dbc.CardBody([
                         html.Div(id="table-available")
                     ])
@@ -109,6 +151,18 @@ app.layout = dbc.Container([
                     ])
                 ])
             ], width=6),
+        ]),
+        
+        # Explanation Row
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("How the Agent Works"),
+                    dbc.CardBody([
+                        dcc.Markdown(explanation_text, className="text-muted small")
+                    ])
+                ], className="mt-4")
+            ], width=12)
         ])
     ])
 ], fluid=True)
@@ -120,9 +174,10 @@ app.layout = dbc.Container([
      Output("main-content", "style")],
     [Input("btn-connect", "n_clicks")],
     [State("input-draft-id", "value"),
-     State("input-user-slot", "value")]
+     State("input-user-slot", "value"),
+     State("model-dropdown", "value")]
 )
-def connect_draft(n_clicks, draft_id, slot):
+def connect_draft(n_clicks, draft_id, slot, model_path):
     """
     Callback triggered by the 'Connect' button.
     Initializes the SleeperDraftManager, sets the user's slot, and shows the main content area.
@@ -130,6 +185,7 @@ def connect_draft(n_clicks, draft_id, slot):
     :param n_clicks: Number of times the connect button has been clicked.
     :param draft_id: The ID of the Sleeper draft entered by the user.
     :param slot: The user's draft slot (1-12) entered by the user.
+    :param model_path: The path to the selected model file from the dropdown.
     :return: A tuple containing the connection status message/alert and the style for the main content div.
     """
     global manager, user_slot
@@ -139,14 +195,13 @@ def connect_draft(n_clicks, draft_id, slot):
         return "", {"display": "none"}
     
     if not draft_id:
-        # Prompt user for Draft ID if not provided
         return dbc.Alert("Please enter a Draft ID.", color="danger"), {"display": "none"}
     
+    if not model_path:
+        return dbc.Alert("Please select a model.", color="danger"), {"display": "none"}
+    
     try:
-        # Define the path to the trained model
-        model_path = "src/models/ppo_draft_agent_64000.pth" 
         if not os.path.exists(model_path):
-             # Alert if model file is not found
              return dbc.Alert(f"Error: Model not found at {model_path}", color="danger"), {"display": "none"}
 
         # Initialize the backend manager
@@ -217,15 +272,16 @@ def update_dashboard(n):
         html.H4(f"{rec['Pos']} • {rec['Team']}"),
         html.Hr(),
         dbc.Row([
-            dbc.Col(html.H5(f"VOR: {rec['VOR']:.2f}"), width=6),
-            dbc.Col(html.H5(f"Value: {rec['Value']:.2f}"), width=6),
+            dbc.Col(html.H5(f"ECR: {rec['ECR']:.2f}"), width=4),
+            dbc.Col(html.H5(f"Value: {rec['Value']:.2f}"), width=4),
+            dbc.Col(html.H5(f"VOR: {rec['VOR']:.2f}"), width=4),
         ])
     ])
     
     # 4. Generate data tables for display
     # Top Available Players Table
     top_n = manager.available_players.head(config.N_PLAYERS_WINDOW)
-    df_avail = top_n.select(['Player', 'Pos', 'Team', 'VOR', 'Value']).to_pandas()
+    df_avail = top_n.select(['Player', 'Pos', 'Team', 'ECR', 'Value', 'VOR']).to_pandas()
     table_avail = dbc.Table.from_dataframe(df_avail, striped=True, bordered=True, hover=True, size='sm', className="text-light")
     
     # User's Current Roster Table
@@ -246,4 +302,4 @@ def update_dashboard(n):
 
 if __name__ == '__main__':
     # Run the Dash application
-    app.run_server(debug=True)
+    app.run(debug=False)
