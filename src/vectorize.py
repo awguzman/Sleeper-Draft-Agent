@@ -24,10 +24,11 @@ def worker(remote, parent_remote, env_fn):
                 if done:
                     # If an episode is done, automatically reset the environment
                     # and return the new initial state as the next_state.
-                    next_state = env.reset()
+                    # Note: env.reset() now returns (state, info)
+                    next_state, _ = env.reset()
                 remote.send((next_state, reward, done, info))
             elif cmd == 'reset':
-                state = env.reset()
+                state, _ = env.reset()
                 remote.send(state)
             elif cmd == 'close':
                 remote.close()
@@ -97,13 +98,14 @@ class VectorizedDraftSimulator:
     def _stack_states(self, states):
         """
         Stacks the tuple of state tensors from each environment into a single batched tensor.
-        Input: [(roster_feats_0, player_feats_0, mask_0), (roster_feats_1, player_feats_1, mask_1), ...]
-        Output: (batched_roster_feats, batched_player_feats, batched_mask)
+        Input: [(roster_0, player_0, mask_0, team_0), (roster_1, player_1, mask_1, team_1), ...]
+        Output: (batched_roster, batched_player, batched_mask, batched_team)
         """
-        roster_feats, player_feats, masks = zip(*states)
+        roster_feats, player_feats, masks, team_idxs = zip(*states)
         return (torch.stack(roster_feats),
                 torch.stack(player_feats),
-                torch.stack(masks))
+                torch.stack(masks),
+                torch.stack(team_idxs))
 
 if __name__ == '__main__':
     # --- Debug Zone ---
@@ -125,11 +127,12 @@ if __name__ == '__main__':
 
     # Test reset
     batched_states = vec_env.reset()
-    roster_feats, player_feats, masks = batched_states
+    roster_feats, player_feats, masks, team_idxs = batched_states
     print("\n--- Testing Reset ---")
     print(f"Batched Roster Features Shape: {roster_feats.shape}") # Should be (num_envs, roster_dim)
     print(f"Batched Player Features Shape: {player_feats.shape}") # Should be (num_envs, window, player_dim)
     print(f"Batched Masks Shape: {masks.shape}")                   # Should be (num_envs, window)
+    print(f"Batched Team Indices Shape: {team_idxs.shape}")        # Should be (num_envs,)
 
     # Test step
     # Create a batch of random actions (0 for each env in this case)

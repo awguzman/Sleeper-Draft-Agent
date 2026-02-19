@@ -61,8 +61,9 @@ class SleeperDraftManager:
         self.model = DraftAgent(
             n_players_window=config.N_PLAYERS_WINDOW,
             player_feat_dim=config.PLAYER_FEAT_DIM,
-            roster_feat_dim=4 + (config.NUM_TEAMS - 1) * 4, # Calculated as in train.py
-            embed_dim=config.EMBED_DIM
+            roster_feat_dim=config.ROSTER_FEAT_DIM,
+            embed_dim=config.EMBED_DIM,
+            team_embed_dim=config.TEAM_EMBED_DIM
         ).to(self.device)
         
         # Load weights
@@ -162,7 +163,7 @@ class SleeperDraftManager:
         :return: A dictionary representing the recommended player's data.
         """
         # 1. Construct the feature tensors required by the model
-        roster_feats, player_feats, mask = self._build_tensors(team_idx)
+        roster_feats, player_feats, mask, team_idx_tensor = self._build_tensors(team_idx)
         
         # 2. Run inference with the model
         with torch.no_grad():
@@ -170,8 +171,9 @@ class SleeperDraftManager:
             roster_feats = roster_feats.unsqueeze(0).to(self.device)
             player_feats = player_feats.unsqueeze(0).to(self.device)
             mask = mask.unsqueeze(0).to(self.device)
+            team_idx_tensor = team_idx_tensor.unsqueeze(0).to(self.device)
             
-            action_logits, _ = self.model(roster_feats, player_feats, mask)
+            action_logits, _ = self.model(roster_feats, player_feats, mask, team_idx_tensor)
             
             # Greedily select the action with the highest logit
             action_idx = torch.argmax(action_logits).item()
@@ -241,4 +243,63 @@ class SleeperDraftManager:
                  
         valid_action_mask_tensor = torch.tensor(valid_action_mask, dtype=torch.bool)
         
-        return roster_features_tensor, player_features_tensor, valid_action_mask_tensor
+        # 4. Team Index Tensor
+        team_idx_tensor = torch.tensor(team_idx, dtype=torch.long)
+        
+        return roster_features_tensor, player_features_tensor, valid_action_mask_tensor, team_idx_tensor
+
+# --- Debug Zone ---
+if __name__ == '__main__':
+    print("--- Sleeper Draft Agent Debugger ---")
+    
+    # 1. Get Draft ID
+    draft_id = input("Enter Sleeper Draft ID: ").strip()
+    if not draft_id:
+        print("Draft ID is required.")
+        sys.exit(1)
+        
+    # 2. Get Model Path
+    default_model = "../src/models/ppo_draft_agent_64000.pth"
+    model_path = input(f"Enter Model Path (default: {default_model}): ").strip()
+    if not model_path:
+        model_path = default_model
+        
+    if not os.path.exists(model_path):
+        print(f"Error: Model file not found at {model_path}")
+        sys.exit(1)
+
+    # 3. Initialize Manager
+    try:
+        manager = SleeperDraftManager(draft_id, model_path)
+    except Exception as e:
+        print(f"Failed to initialize manager: {e}")
+        sys.exit(1)
+        
+    print(f"\nConnected to draft {draft_id}.")
+    print(f"Initial Board Size: {len(manager.available_players)}")
+    
+    # 4. Interactive Loop
+    while True:
+        cmd = input("\nPress Enter to update state (or 'q' to quit): ").strip().lower()
+        if cmd == 'q':
+            break
+            
+        manager.update_state()
+        
+        # Determine who is on the clock
+        next_pick_num = manager.current_pick_no + 1
+        
+        # Calculate team index for snake draft
+        current_round = ((next_pick_num - 1) // config.NUM_TEAMS) + 1
+        pick_in_round = (next_pick_num - 1) % config.NUM_TEAMS
+        
+        if current_round % 2 == 1:
+            on_clock_idx = pick_in_round
+        else:
+            on_clock_idx = config.NUM_TEAMS - 1 - pick_in_round
+            
+        print(f"On Clock: Team {on_clock_idx + 1} (Round {current_round}, Pick {next_pick_num})")
+        
+        # Get Recommendation
+        rec = manager.get_recommendation(on_clock_idx)
+        print(f"Agent Recommends: {rec['Player']} ({rec['Pos']} - VOR: {rec['VOR']:.2f})")

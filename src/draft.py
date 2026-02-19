@@ -6,6 +6,7 @@ import polars as pl
 import torch
 
 from board import create_board
+import config
 
 class DraftSimulator:
     """
@@ -15,7 +16,10 @@ class DraftSimulator:
     team rosters, and turn order. It provides methods to interact with the
     environment in a way that is compatible with RL training loops.
     """
-    def __init__(self, num_teams=12, num_rounds=16, n_players_window=24, roster_limits=None):
+    def __init__(self, num_teams=config.NUM_TEAMS,
+                 num_rounds=config.NUM_ROUNDS,
+                 n_players_window=config.N_PLAYERS_WINDOW,
+                 roster_limits=config.ROSTER_LIMITS):
         """
         Initializes the draft simulation environment.
 
@@ -61,8 +65,8 @@ class DraftSimulator:
         self.current_round = 1
         self.current_pick = 1
         self.current_team_idx = 0
-        state, _ = self.get_state(self.current_team_idx)
-        return state
+        state, info = self.get_state(self.current_team_idx)
+        return state, info
 
     def step(self, action):
         """
@@ -131,7 +135,7 @@ class DraftSimulator:
 
         :param team_idx: The index of the team for which to generate the state.
         :return: A tuple containing (state_tuple, info_dict).
-                 State tuple: (roster_features, player_features, valid_action_mask)
+                 State tuple: (roster_features, player_features, valid_action_mask, team_idx)
                  Info dict: {'failsafe_triggered': bool}
         """
         # 1. Get Top N available players
@@ -201,8 +205,11 @@ class DraftSimulator:
                 valid_action_mask[i] = False
 
         valid_action_mask_tensor = torch.tensor(valid_action_mask, dtype=torch.bool)
+        
+        # 5. Team Index Tensor
+        team_idx_tensor = torch.tensor(team_idx, dtype=torch.long)
 
-        state = (roster_features_tensor, player_features_tensor, valid_action_mask_tensor)
+        state = (roster_features_tensor, player_features_tensor, valid_action_mask_tensor, team_idx_tensor)
         info = {'failsafe_triggered': failsafe_triggered}
         
         return state, info
@@ -234,13 +241,15 @@ class DraftSimulator:
 # --- Debug Zone ---
 if __name__ == '__main__':
     simulator = DraftSimulator()
-    roster_feats, player_feats, mask = simulator.reset()
+    state, info = simulator.reset()
+    roster_feats, player_feats, mask, team_idx = state
     
     print(f"Draft Initialized for {simulator.num_teams} teams and {simulator.num_rounds} rounds.")
     print("\nInitial State Tensors:")
     print(f"Roster Features Shape: {roster_feats.shape}")
     print(f"Player Features Shape: {player_feats.shape}")
     print(f"Action Mask Shape: {mask.shape}")
+    print(f"Team Index: {team_idx}")
     
     # Verify content
     print("\nSample Roster Features (My Team + 1st Opponent):")

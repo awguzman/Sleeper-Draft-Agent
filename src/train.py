@@ -41,6 +41,7 @@ class Memory:
         self.actions = []
         self.states_roster = []
         self.states_player = []
+        self.states_team = []
         self.masks = []
         self.logprobs = []
         self.rewards = []
@@ -51,6 +52,7 @@ class Memory:
         del self.actions[:]
         del self.states_roster[:]
         del self.states_player[:]
+        del self.states_team[:]
         del self.masks[:]
         del self.logprobs[:]
         del self.rewards[:]
@@ -60,7 +62,10 @@ class PPO:
     """
     Proximal Policy Optimization (PPO) Agent.
     """
-    def __init__(self, n_players_window, player_feat_dim, roster_feat_dim, embed_dim=64):
+    def __init__(self, n_players_window = config.N_PLAYERS_WINDOW,
+                 player_feat_dim = config.PLAYER_FEAT_DIM,
+                 roster_feat_dim = config.ROSTER_FEAT_DIM,
+                 embed_dim = config.EMBED_DIM):
         # Initialize hyperparameters
         self.lr = config.LR
         self.gamma = config.GAMMA
@@ -78,7 +83,7 @@ class PPO:
         # Initialize Critic Loss Function
         self.Loss = nn.MSELoss()
 
-    def select_action(self, roster_feats, player_feats, mask, memory):
+    def select_action(self, roster_feats, player_feats, mask, team_idx, memory):
         """
         Selects a batch of actions given a batch of states, and stores the transitions in memory.
         """
@@ -86,17 +91,17 @@ class PPO:
         roster_feats = roster_feats.to(config.DEVICE)
         player_feats = player_feats.to(config.DEVICE)
         mask = mask.to(config.DEVICE)
+        team_idx = team_idx.to(config.DEVICE)
 
         # Use the old policy to generate actions
         with torch.no_grad():
-            action_logits, _ = self.policy_old(roster_feats, player_feats, mask)
+            action_logits, _ = self.policy_old(roster_feats, player_feats, mask, team_idx)
 
         # Check for all-masked logits (all -inf)
         # This only happens if the agent has no available actions (e.g. only needs positions not in their current board)
         # Should be fixed but leaving this until we are sure
         if (action_logits == float('-inf')).all(dim=1).any():
             print("!!! ALL ACTIONS MASKED DETECTED !!!")
-            # Find the index of the bad row
             bad_indices = (action_logits == float('-inf')).all(dim=1).nonzero(as_tuple=True)[0]
             print(f"Bad indices in batch: {bad_indices}")
             print(f"Mask for first bad index: {mask[bad_indices[0]]}")
@@ -110,6 +115,7 @@ class PPO:
         # Store transitions in memory
         memory.states_roster.append(roster_feats)
         memory.states_player.append(player_feats)
+        memory.states_team.append(team_idx)
         memory.masks.append(mask)
         memory.actions.append(actions)
         memory.logprobs.append(action_logprobs)
@@ -129,31 +135,53 @@ class PPO:
         new_entropy_coef = config.ENTROPY_COEF - (config.ENTROPY_DECAY_RATE * current_episode)
         new_entropy_coef = max(new_entropy_coef, config.ENTROPY_FINAL)
 
-        # --- Monte Carlo Estimate of Rewards for Vectorized Environment ---
-        rewards = []
-        discounted_reward = 0
-
-        # Convert lists of tensors to tensors
-        # Shape: (num_steps, num_envs)
-        mem_rewards = torch.stack(memory.rewards).to(config.DEVICE)
-        mem_terminals = torch.stack(memory.is_terminals).to(config.DEVICE)
-
-        # Compute the discounted reward for each environment's trajectory
-        for step in reversed(range(len(mem_rewards))):
-            # If a step was a terminal state, the discounted reward for the *previous* step is reset to 0
-            discounted_reward = mem_rewards[step] + self.gamma * discounted_reward * (1 - mem_terminals[step].float())
-            rewards.insert(0, discounted_reward)
+        # --- Masked Reward Calculation (Per-Team Returns) ---
+        # Stack lists into tensors: (num_steps, num_envs)
+        all_rewards = torch.stack(memory.rewards).to(config.DEVICE)
+        all_terminals = torch.stack(memory.is_terminals).to(config.DEVICE)
+        all_teams = torch.stack(memory.states_team).to(config.DEVICE)
         
-        # Flatten the rewards tensor
+        num_steps, num_envs = all_rewards.shape
+        
+        # Initialize returns tensor
+        returns = torch.zeros_like(all_rewards)
+        
+        # Iterate over each team to calculate their independent discounted returns
+        for team_idx in range(config.NUM_TEAMS):
+            # Create a mask for when this team was acting
+            # Shape: (num_steps, num_envs)
+            team_mask = (all_teams == team_idx).float()
+            
+            # Extract rewards ONLY for this team (zero out others)
+            team_rewards = all_rewards * team_mask
+            
+            running_return = torch.zeros(num_envs).to(config.DEVICE)
+            
+            # Iterate backwards
+            for t in reversed(range(num_steps)):
+                # If terminal, reset return
+                running_return = running_return * (1 - all_terminals[t].float())
+                
+                # Accumulate return
+                # If it's this team's turn, team_rewards[t] is the reward, otherwise 0.
+                # The discount gamma applies to every time step (wall-clock time).
+                running_return = team_rewards[t] + self.gamma * running_return
+                
+                # If it was this team's turn at step t, store the calculated return
+                # We add it to the master returns tensor (which is initialized to 0)
+                returns[t] += running_return * team_mask[t]
+        
+        # Flatten the returns tensor for PPO update
         # Shape: (num_steps * num_envs)
-        rewards = torch.cat(rewards)
+        returns = returns.view(-1)
         
-        # Normalize rewards
-        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
+        # Normalize returns
+        returns = (returns - returns.mean()) / (returns.std() + 1e-7)
 
         # --- Batch and Flatten Data ---
         old_states_roster = torch.cat(memory.states_roster).detach()
         old_states_player = torch.cat(memory.states_player).detach()
+        old_states_team = torch.cat(memory.states_team).detach()
         old_masks = torch.cat(memory.masks).detach()
         old_actions = torch.cat(memory.actions).detach()
         old_logprobs = torch.cat(memory.logprobs).detach()
@@ -164,10 +192,10 @@ class PPO:
         
         # Optimize policy for K epochs
         for _ in range(self.k_epochs):
-            logprobs, state_values, dist_entropy = self.evaluate(old_states_roster, old_states_player, old_masks, old_actions)
+            logprobs, state_values, dist_entropy = self.evaluate(old_states_roster, old_states_player, old_masks, old_states_team, old_actions)
 
             # Calculate advantages
-            advantages = rewards - state_values.detach()
+            advantages = returns - state_values.detach()
 
             # Compute ratio (pi_theta / pi_theta__old)
             ratios = torch.exp(logprobs - old_logprobs)
@@ -178,7 +206,7 @@ class PPO:
             actor_loss = -torch.min(surr1, surr2).mean()
             
             # Critic Loss
-            critic_loss = self.Loss(state_values, rewards)
+            critic_loss = self.Loss(state_values, returns)
             
             # Entropy Loss
             entropy_loss = -dist_entropy.mean()
@@ -219,11 +247,11 @@ class PPO:
         
         return avg_metrics
 
-    def evaluate(self, roster_feats, player_feats, mask, action):
+    def evaluate(self, roster_feats, player_feats, mask, team_idx, action):
         """
         Evaluates action log-probabilities and state values for a batch of states and actions.
         """
-        action_logits, state_values = self.policy(roster_feats, player_feats, mask)
+        action_logits, state_values = self.policy(roster_feats, player_feats, mask, team_idx)
         
         dist = Categorical(logits=action_logits)
         action_logprobs = dist.log_prob(action)
@@ -261,22 +289,24 @@ def train():
     else:
         print("TensorBoard is already running on port 6006.")
         webbrowser.open("http://localhost:6006")
-
-    # --- Initialization ---
-    roster_feat_dim = 4 + (config.NUM_TEAMS - 1) * 4
-    player_feat_dim = config.PLAYER_FEAT_DIM
     
-    # --- Vectorized Environment ---
+    # --- Initialize Environment ---
     num_envs = config.NUM_ENVS # Number of parallel drafts
     env_fn = partial(DraftSimulator,
                      num_teams=config.NUM_TEAMS,
                      num_rounds=config.NUM_ROUNDS,
                      n_players_window=config.N_PLAYERS_WINDOW,
                      roster_limits=config.ROSTER_LIMITS)
-    
-    vec_env = VectorizedDraftSimulator(env_fn=env_fn, num_envs=num_envs)
 
-    ppo_agent = PPO(config.N_PLAYERS_WINDOW, player_feat_dim, roster_feat_dim, config.EMBED_DIM)
+    # --- Vectorize Environment ---
+    vec_env = VectorizedDraftSimulator(env_fn=env_fn,
+                                       num_envs=num_envs)
+
+    # --- Initialize Agent and Memory ---
+    ppo_agent = PPO(n_players_window=config.N_PLAYERS_WINDOW,
+                    player_feat_dim=config.PLAYER_FEAT_DIM,
+                    roster_feat_dim=config.ROSTER_FEAT_DIM,
+                    embed_dim=config.EMBED_DIM)
     memory = Memory()
 
     # --- Training Loop ---
@@ -284,22 +314,23 @@ def train():
     recent_rewards = deque(maxlen=config.LOG_INTERVAL)
     total_episodes = 0
     last_log_episode = 0
-    
+
     # Failsafe Counter
     failsafe_count = 0
 
+    # Create the models directory if it doesn't exist
     if not os.path.exists("models"):
         os.makedirs("models")
-    
-    (roster_feats, player_feats, mask) = vec_env.reset()
+
+    # Reset environment to get initial state
+    (roster_feats, player_feats, mask, team_idx) = vec_env.reset()
 
     while total_episodes < config.MAX_EPISODES:
-        
         # Collect a batch of experiences
         for _ in range(config.UPDATE_TIMESTEP // num_envs):
-            actions = ppo_agent.select_action(roster_feats, player_feats, mask, memory)
+            actions = ppo_agent.select_action(roster_feats, player_feats, mask, team_idx, memory)
             
-            (next_roster_feats, next_player_feats, next_mask), rewards, dones, infos = vec_env.step(actions)
+            (next_roster_feats, next_player_feats, next_mask, next_team_idx), rewards, dones, infos = vec_env.step(actions)
             
             # Count failsafes
             for info in infos:
@@ -314,11 +345,12 @@ def train():
             for i, done in enumerate(dones):
                 if done:
                     total_episodes += 1
-                    writer.add_scalar('Training/Reward', running_rewards[i], total_episodes)
-                    recent_rewards.append(running_rewards[i])
+                    # Calculate average reward per team for this episode
+                    avg_team_reward = running_rewards[i] / config.NUM_TEAMS
+                    recent_rewards.append(avg_team_reward)
                     running_rewards[i] = 0
 
-            roster_feats, player_feats, mask = next_roster_feats, next_player_feats, next_mask
+            roster_feats, player_feats, mask, team_idx = next_roster_feats, next_player_feats, next_mask, next_team_idx
         
         # Update the policy
         metrics = ppo_agent.update(memory, total_episodes)
@@ -343,7 +375,7 @@ def train():
             last_log_episode = total_episodes
             failsafe_count = 0 # Reset counter after logging
             
-    # Save Final Model with descriptive name
+    # Save final model
     final_model_name = f"ppo_draft_agent_{config.NUM_TEAMS}team_{config.NUM_ROUNDS}rounds.pth"
     final_model_path = os.path.join("models", final_model_name)
     torch.save(ppo_agent.policy.state_dict(), final_model_path)
