@@ -13,8 +13,7 @@ class DraftSimulator:
     A simulated fantasy football draft environment for training RL agents.
 
     This class manages the state of the draft, including the draft board,
-    team rosters, and turn order. It provides methods to interact with the
-    environment in a way that is compatible with RL training loops.
+    team rosters, and turn order.
     """
     def __init__(self, num_teams=config.NUM_TEAMS,
                  num_rounds=config.NUM_ROUNDS,
@@ -27,18 +26,18 @@ class DraftSimulator:
         :param num_rounds: The total number of draft rounds.
         :param n_players_window: The number of top available players to include in the state.
         :param roster_limits: A dictionary defining the max number of players per position.
-                              e.g., {'QB': 3, 'RB': 8, 'WR': 8, 'TE': 3}
+                              e.g., {'QB': 2, 'RB': 6, 'WR': 7, 'TE': 2}
         """
+
         self.num_teams = num_teams
         self.num_rounds = num_rounds
         self.n_players_window = n_players_window
-        self.roster_limits = roster_limits if roster_limits is not None else {
-            'QB': 3, 'RB': 8, 'WR': 8, 'TE': 3
-        }
+        self.roster_limits = roster_limits
         self.positions = ['QB', 'RB', 'WR', 'TE'] # Define positions for easier iteration
 
         # The full draft board with VOR and Value calculations
         self.full_board = create_board(preprocess=True)
+
         # The board of players still available to be drafted
         self.available_players = self.full_board.clone()
 
@@ -50,7 +49,7 @@ class DraftSimulator:
         # State variables to track draft progress
         self.current_round = 0
         self.current_pick = 0
-        self.current_team_idx = 0
+        self.current_team_idx = 0   # Will be 0-indexed
 
     def reset(self):
         """
@@ -62,9 +61,11 @@ class DraftSimulator:
         self.rosters = [
             {pos: [] for pos in self.positions} for _ in range(self.num_teams)
         ]
+
         self.current_round = 1
         self.current_pick = 1
         self.current_team_idx = 0
+
         state, info = self.get_state(self.current_team_idx)
         return state, info
 
@@ -93,7 +94,7 @@ class DraftSimulator:
         # If the agent picks a player that violates the limit, it means the failsafe in get_state was used.
         # We apply a penalty but allow the pick.
         current_count = len(self.rosters[self.current_team_idx][player_pos])
-        limit = self.roster_limits.get(player_pos, 999)
+        limit = self.roster_limits.get(player_pos)
         
         penalty = 0
         if current_count >= limit:
@@ -123,8 +124,7 @@ class DraftSimulator:
         if not done:
             next_state, info = self.get_state(self.current_team_idx)
         else:
-            # If done, return a dummy state or None. 
-            # Returning the last state is often useful for value estimation.
+            # If done, returning the last state for value estimation.
             next_state, info = self.get_state(self.current_team_idx) 
 
         return next_state, reward, done, info
@@ -143,9 +143,11 @@ class DraftSimulator:
 
         # 2. Construct player_features tensor
         player_features = []
+
         # Map positions to indices: QB=0, RB=1, WR=2, TE=3
         pos_map = {pos: i for i, pos in enumerate(self.positions)}
-        
+
+        # One-hot encode positions.
         for row in top_n_players.iter_rows(named=True):
             pos_one_hot = [0.0] * len(self.positions)
             if row['Pos'] in pos_map:
@@ -155,7 +157,7 @@ class DraftSimulator:
             features = [row['VOR'], row['Value']] + pos_one_hot
             player_features.append(features)
         
-        # Pad if fewer than N players are available (this should never happen)
+        # Pad if fewer than N players are available (this should never happen unless num_rounds is too large)
         # We pad with 0s. The mask will ensure these aren't selected.
         while len(player_features) < self.n_players_window:
             player_features.append([0.0] * (2 + len(self.positions)))
@@ -178,11 +180,11 @@ class DraftSimulator:
         roster_features_tensor = torch.tensor(roster_features, dtype=torch.float32)
 
         # 4. Generate valid_action_mask
-        # Mask is True for INVALID actions (PyTorch convention for masked_fill)
+        # Mask is True for invalid actions
         valid_action_mask = []
         my_current_counts = {pos: len(self.rosters[team_idx][pos]) for pos in self.positions}
         
-        # Check limits for real players
+        # Check limits for real (non-padded) players
         for row in top_n_players.iter_rows(named=True):
             player_pos = row['Pos']
             # If we have reached the limit for this position, mask it
@@ -195,7 +197,7 @@ class DraftSimulator:
         while len(valid_action_mask) < self.n_players_window:
             valid_action_mask.append(True)
 
-        # --- Failsafe: If all actions are masked, unmask everything (will punish later) ---
+        # --- Failsafe: If all actions are masked, unmask everything (will punish in step()) ---
         failsafe_triggered = False
         if all(valid_action_mask):
             failsafe_triggered = True

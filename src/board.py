@@ -15,24 +15,26 @@ def create_board(preprocess: bool = False) -> pl.DataFrame:
     :returns: Polars DataFrame containing the draft board with optional preprocessing.
     """
 
+    # Load draft rankings from nflreadpy
     board_df = load_ff_rankings(type = 'draft')
 
     # Check that the board was loaded correctly
     if board_df.is_empty():
         raise Exception("Unable to load draft rankings from nflreadpy")
 
-    ### Data Cleaning ###
+    # --- Data Cleaning ---
     board_columns = ['id', 'player', 'team', 'bye', 'page_type', 'ecr_type', 'pos',
                     'ecr', 'best', 'worst', 'sd', 'scrape_date']
     board_df = board_df.select(board_columns).sort('ecr')
 
-    # Filter out no fantasy positions.
+    # Filter out non-fantasy positions.
     board_df = board_df.filter(pl.col('pos').is_in(['QB', 'RB', 'WR', 'TE']))
 
     # Filter for overall redraft rankings.
     board_df = board_df.filter(pl.col('ecr_type') == 'ro').drop('ecr_type')
 
     # Get rid of the defensive rankings for two-way players (e.g. Travis Hunter)
+    # This rarely happens, but it serves as a failsafe.
     board_df = board_df.filter(pl.col('page_type') == 'redraft-overall').drop('page_type')
 
     # Rename columns for a user-friendly final DataFrame.
@@ -65,14 +67,15 @@ def process_board(board_df: pl.DataFrame) -> pl.DataFrame:
     :return: Processed draft board Polars DataFrame.
     """
 
-    # Invert and normalize ECR rankings
+    # --- Invert and normalize ECR rankings ---
     max_ecr = board_df['ECR'].max()
     processed_df = board_df.with_columns(
-        ((max_ecr - pl.col('ECR'))/max_ecr).round(5).alias('Value')
+        ((max_ecr - pl.col('ECR')) / max_ecr).round(5).alias('Value')
     )
 
-    ### Compute Value over Replacement (VOR) ###
+    # --- Compute Value over Replacement (VOR) ---
     # Define replacement cutoffs based on "average" starter (12 team league w/ Starters (QB x1, RB x2, WR x3, TE x1 , FLX x2))
+    # This is not a hard-science, these values can be adjusted, but they will change the reward signal.
     replacement_cutoffs = {'QB': 6, 'RB': 12, 'WR': 18, 'TE': 6}
 
     baselines = {}
@@ -86,7 +89,7 @@ def process_board(board_df: pl.DataFrame) -> pl.DataFrame:
 
     return processed_df
 
-### Debug Zone ###
+# --- Debug Zone ---
 if __name__ == '__main__':
     # Tell polars to show all rows and columns
     pl.Config(tbl_rows=-1, tbl_cols=-1)

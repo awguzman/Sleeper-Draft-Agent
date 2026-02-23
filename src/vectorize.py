@@ -1,11 +1,12 @@
 """
 This module provides a vectorized wrapper for the DraftSimulator environment
-to run multiple simulations in parallel using multiprocessing.
+to run multiple simulations in parallelg.
 """
 
 import torch
-import numpy as np
 from multiprocessing import Process, Pipe
+
+import config
 
 def worker(remote, parent_remote, env_fn):
     """
@@ -24,7 +25,6 @@ def worker(remote, parent_remote, env_fn):
                 if done:
                     # If an episode is done, automatically reset the environment
                     # and return the new initial state as the next_state.
-                    # Note: env.reset() now returns (state, info)
                     next_state, _ = env.reset()
                 remote.send((next_state, reward, done, info))
             elif cmd == 'reset':
@@ -48,7 +48,7 @@ class VectorizedDraftSimulator:
     This class creates multiple instances of the environment in parallel processes
     and provides a batched interface to step through them simultaneously.
     """
-    def __init__(self, env_fn, num_envs):
+    def __init__(self, env_fn, num_envs = config.NUM_ENVS):
         self.num_envs = num_envs
         self.remotes, self.work_remotes = zip(*[Pipe() for _ in range(num_envs)])
 

@@ -8,8 +8,8 @@ The core components are:
     - Initializing the (vectorized) environment, agent, and TensorBoard for logging.
     - Running training episodes (simulated drafts).
     - Collecting experiences (transitions) in the Memory buffer.
-    - Periodically updating the agent's policy using the PPO algorithm.
-    - Logging metrics and saving model checkpoints.
+    - Periodically updating the agent's policy.
+    - Logging metrics and saving models.
 """
 
 import torch
@@ -66,6 +66,7 @@ class PPO:
                  player_feat_dim = config.PLAYER_FEAT_DIM,
                  roster_feat_dim = config.ROSTER_FEAT_DIM,
                  embed_dim = config.EMBED_DIM):
+
         # Initialize hyperparameters
         self.lr = config.LR
         self.gamma = config.GAMMA
@@ -87,6 +88,7 @@ class PPO:
         """
         Selects a batch of actions given a batch of states, and stores the transitions in memory.
         """
+
         # Move state tensors to the correct device
         roster_feats = roster_feats.to(config.DEVICE)
         player_feats = player_feats.to(config.DEVICE)
@@ -101,7 +103,6 @@ class PPO:
         # This only happens if the agent has no available actions (e.g. only needs positions not in their current board)
         # Should be fixed but leaving this until we are sure
         if (action_logits == float('-inf')).all(dim=1).any():
-            print("!!! ALL ACTIONS MASKED DETECTED !!!")
             bad_indices = (action_logits == float('-inf')).all(dim=1).nonzero(as_tuple=True)[0]
             print(f"Bad indices in batch: {bad_indices}")
             print(f"Mask for first bad index: {mask[bad_indices[0]]}")
@@ -120,12 +121,14 @@ class PPO:
         memory.actions.append(actions)
         memory.logprobs.append(action_logprobs)
 
+        # Return sampled actions to CPU is this is where the environments are housed.
         return actions.cpu().numpy()
 
     def update(self, memory, current_episode):
         """
         Updates the policy using the collected experiences in memory.
         """
+
         # --- Decay Hyperparameters ---
         new_lr = config.LR - (config.LR_DECAY_RATE * current_episode)
         new_lr = max(new_lr, config.LR_FINAL)
@@ -164,7 +167,7 @@ class PPO:
                 
                 # Accumulate return
                 # If it's this team's turn, team_rewards[t] is the reward, otherwise 0.
-                # The discount gamma applies to every time step (wall-clock time).
+                # The discount gamma applies to every time step.
                 running_return = team_rewards[t] + self.gamma * running_return
                 
                 # If it was this team's turn at step t, store the calculated return
@@ -192,15 +195,17 @@ class PPO:
         
         # Optimize policy for K epochs
         for _ in range(self.k_epochs):
-            logprobs, state_values, dist_entropy = self.evaluate(old_states_roster, old_states_player, old_masks, old_states_team, old_actions)
+            logprobs, state_values, dist_entropy = self.evaluate(old_states_roster, old_states_player, old_masks,
+                                                                 old_states_team, old_actions
+                                                                 )
 
             # Calculate advantages
             advantages = returns - state_values.detach()
 
-            # Compute ratio (pi_theta / pi_theta__old)
+            # Compute PPO ratio (pi_theta / pi_theta__old)
             ratios = torch.exp(logprobs - old_logprobs)
             
-            # Actor Loss with Clipping
+            # Actor Loss with clipping
             surr1 = ratios * advantages
             surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
             actor_loss = -torch.min(surr1, surr2).mean()
@@ -260,7 +265,7 @@ class PPO:
         return action_logprobs, torch.squeeze(state_values), dist_entropy
 
 def is_port_in_use(port):
-    """Checks if a local port is already in use."""
+    """Checks if a local port is already in use. Used in automatic TensorBoard launch"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('localhost', port)) == 0
 
@@ -268,7 +273,7 @@ def train():
     """
     Main training function.
     """
-    print(f"Training on device: {config.DEVICE} for {config.MAX_EPISODES} episodes (drafts).")
+    print(f"Training on device: {config.DEVICE} for {config.MAX_EPISODES} drafts.")
     
     # --- Setup TensorBoard for logging ---
     if not os.path.exists("runs"):
@@ -354,7 +359,7 @@ def train():
         
         # Update the policy
         metrics = ppo_agent.update(memory, total_episodes)
-        memory.clear()
+        memory.clear()  # Clear memory after update
         
         # Log metrics after each update
         writer.add_scalar('Loss/Total', metrics["loss"], total_episodes)
