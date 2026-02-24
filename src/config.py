@@ -12,28 +12,31 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # --- Draft Settings ---
 NUM_TEAMS = 12                                      # Number of teams in the draft.
 NUM_ROUNDS = 16                                     # Number of rounds in the draft.
-POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DST']    # Standardize position abbreviations.
 # Roster slots per position on each team
 ROSTER_SLOTS = {'QB':  1,
                 'RB':  2,
-                'WR':  2,
+                'WR':  3,
                 'TE':  1,
-                'K':   1,
-                'DST': 1}
+                'K':   0,
+                'DST': 0
+                }
 # Index for replacement player cutoffs for VOR calculation.
 REPLACEMENT_CUTOFFS = {'QB': (NUM_TEAMS * ROSTER_SLOTS['QB']) // 2,
                        'RB': (NUM_TEAMS * ROSTER_SLOTS['RB']) // 2,
                        'WR': (NUM_TEAMS * ROSTER_SLOTS['WR']) // 2,
                        'TE': (NUM_TEAMS * ROSTER_SLOTS['TE']) // 2,
                        'K':  (NUM_TEAMS * ROSTER_SLOTS['K']) // 2,
-                       'DST':(NUM_TEAMS * ROSTER_SLOTS['DST']) // 2}
+                       'DST':(NUM_TEAMS * ROSTER_SLOTS['DST']) // 2
+                       }
 # Max number of players per position before masking.
 ROSTER_LIMITS = {'QB':  ROSTER_SLOTS['QB'] * 2,
-                 'RB':  ROSTER_SLOTS['RB'] * 3,
-                 'WR':  ROSTER_SLOTS['WR'] * 3,
+                 'RB':  min(ROSTER_SLOTS['RB'] * 3, 5),
+                 'WR':  min(ROSTER_SLOTS['WR'] * 3, 8),
                  'TE':  ROSTER_SLOTS['TE'] * 2,
-                 'K':   ROSTER_SLOTS['K'] * 2,
-                 'DST': ROSTER_SLOTS['DST'] * 2}
+                 'K':   ROSTER_SLOTS['K'],
+                 'DST': ROSTER_SLOTS['DST']
+                 }
+POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DST']    # Standardize position abbreviations.
 
 # --- Model Architecture ---
 N_PLAYERS_WINDOW = NUM_TEAMS * 3                # Number of top available players to consider (3 rounds ahead)
@@ -51,7 +54,7 @@ MAX_EPISODES = LEARNING_PHASE_EPISODES + REFINEMENT_PHASE_EPISODES  # Total numb
 LOG_INTERVAL = NUM_ENVS                                             # Print log every NUM_ENVS drafts
 
 # --- PPO Hyperparameters ---
-LR = 0.001                                                  # Learning Rate
+LR = 0.0003                                                  # Learning Rate
 LR_FINAL = 0.0003                                           # Final learning rate after decay
 GAMMA = 0.99                                                # Discount Factor (focus on long-term)
 EPS_CLIP = 0.2                                              # PPO Clip Parameter

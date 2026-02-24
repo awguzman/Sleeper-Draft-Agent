@@ -33,7 +33,7 @@ class DraftSimulator:
         self.num_rounds = num_rounds
         self.n_players_window = n_players_window
         self.roster_limits = roster_limits
-        self.positions = ['QB', 'RB', 'WR', 'TE'] # Define positions for easier iteration
+        self.positions = config.POSITIONS
 
         # The full draft board with VOR and Value calculations
         self.full_board = create_board(preprocess=True)

@@ -110,9 +110,3 @@ def run_test_draft(model_path):
             player_names = [p['Player'] for p in players]
             count = len(players)
             print(f"  {pos} ({count}): {', '.join(player_names)}")
-
-if __name__ == "__main__":
-    # Default model path - update this to your latest model
-    model_file = "models/ppo_draft_agent_12team_16rounds.pth"
-
-    run_test_draft(model_file)
