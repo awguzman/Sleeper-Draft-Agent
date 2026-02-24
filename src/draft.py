@@ -98,7 +98,7 @@ class DraftSimulator:
         
         penalty = 0
         if current_count >= limit:
-            penalty = -2.0 # Penalty for backing into a corner
+            penalty = -1.0 # Penalty for using failsafe
 
         # 3. Add player to the current team's roster
         player_data = dict(player_row)
