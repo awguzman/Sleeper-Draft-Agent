@@ -31,6 +31,7 @@ from collections import deque
 from draft import DraftSimulator
 from agent import DraftAgent
 from vectorize import VectorizedDraftSimulator
+from test import run_test_draft
 import config
 
 class Memory:
@@ -381,10 +382,13 @@ def train():
             failsafe_count = 0 # Reset counter after logging
             
     # Save final model
-    final_model_name = f"ppo_draft_agent_{config.NUM_TEAMS}team_{config.NUM_ROUNDS}rounds.pth"
+    final_model_name = f"draft_agent_{config.NUM_TEAMS}team_{config.NUM_ROUNDS}rounds_{config.ROSTER_SLOTS['QB']}QB_{config.ROSTER_SLOTS['RB']}RB_{config.ROSTER_SLOTS['WR']}WR_{config.ROSTER_SLOTS['TE']}TE_{config.ROSTER_SLOTS['K']}K_{config.ROSTER_SLOTS['DEF']}DEF.pth"
     final_model_path = os.path.join("models", final_model_name)
     torch.save(ppo_agent.policy.state_dict(), final_model_path)
     print(f"Training Complete. Final model saved at {final_model_path}")
+    print(f"Running a test draft for the trained model:")
+    run_test_draft(final_model_path)
+
 
     vec_env.close()
     writer.close()

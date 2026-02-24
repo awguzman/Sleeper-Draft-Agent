@@ -5,6 +5,7 @@ This module is responsible for generating the draft board used to train the draf
 import polars as pl
 
 from nflreadpy import load_ff_rankings
+import config
 
 def create_board(preprocess: bool = False) -> pl.DataFrame:
     """
@@ -28,7 +29,7 @@ def create_board(preprocess: bool = False) -> pl.DataFrame:
     board_df = board_df.select(board_columns).sort('ecr')
 
     # Filter out non-fantasy positions.
-    board_df = board_df.filter(pl.col('pos').is_in(['QB', 'RB', 'WR', 'TE']))
+    board_df = board_df.filter(pl.col('pos').is_in(config.POSITIONS))
 
     # Filter for overall redraft rankings.
     board_df = board_df.filter(pl.col('ecr_type') == 'ro').drop('ecr_type')
@@ -74,9 +75,7 @@ def process_board(board_df: pl.DataFrame) -> pl.DataFrame:
     )
 
     # --- Compute Value over Replacement (VOR) ---
-    # Define replacement cutoffs based on "average" starter (12 team league w/ Starters (QB x1, RB x2, WR x3, TE x1 , FLX x2))
-    # This is not a hard-science, these values can be adjusted, but they will change the reward signal.
-    replacement_cutoffs = {'QB': 6, 'RB': 12, 'WR': 18, 'TE': 6}
+    replacement_cutoffs = config.REPLACEMENT_CUTOFFS
 
     baselines = {}
     for pos, rank in replacement_cutoffs.items():

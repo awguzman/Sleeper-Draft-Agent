@@ -9,20 +9,46 @@ import torch
 #DEVICE = torch.device('cpu')
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# --- Environment Settings ---
-NUM_TEAMS = 12                                          # Number of teams in the draft.
-NUM_ROUNDS = 16                                         # Draft 9 starters + 7 bench players.
-POSITIONS = ['QB', 'RB', 'WR', 'TE']                    # Standardize position abbreviations.
-ROSTER_LIMITS = {'QB': 2,'RB': 6, 'WR': 7,'TE': 2}      # Max number of players per position before masking.
-NUM_ENVS = 32                                           # Number of parallel environments. CPU-bound.
+# --- Draft Settings ---
+NUM_TEAMS = 12                                      # Number of teams in the draft.
+NUM_ROUNDS = 16                                     # Number of rounds in the draft.
+POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DST']    # Standardize position abbreviations.
+# Roster slots per position on each team
+ROSTER_SLOTS = {'QB':  1,
+                'RB':  2,
+                'WR':  2,
+                'TE':  1,
+                'K':   1,
+                'DST': 1}
+# Index for replacement player cutoffs for VOR calculation.
+REPLACEMENT_CUTOFFS = {'QB': (NUM_TEAMS * ROSTER_SLOTS['QB']) // 2,
+                       'RB': (NUM_TEAMS * ROSTER_SLOTS['RB']) // 2,
+                       'WR': (NUM_TEAMS * ROSTER_SLOTS['WR']) // 2,
+                       'TE': (NUM_TEAMS * ROSTER_SLOTS['TE']) // 2,
+                       'K':  (NUM_TEAMS * ROSTER_SLOTS['K']) // 2,
+                       'DST':(NUM_TEAMS * ROSTER_SLOTS['DST']) // 2}
+# Max number of players per position before masking.
+ROSTER_LIMITS = {'QB':  ROSTER_SLOTS['QB'] * 2,
+                 'RB':  ROSTER_SLOTS['RB'] * 3,
+                 'WR':  ROSTER_SLOTS['WR'] * 3,
+                 'TE':  ROSTER_SLOTS['TE'] * 2,
+                 'K':   ROSTER_SLOTS['K'] * 2,
+                 'DST': ROSTER_SLOTS['DST'] * 2}
 
 # --- Model Architecture ---
-N_PLAYERS_WINDOW = 32           # Number of top available players to consider
-PLAYER_FEAT_DIM = 6             # [VOR, Value, Pos_QB, Pos_RB, Pos_WR, Pos_TE]
-ROSTER_FEAT_DIM = NUM_TEAMS * 4 # Number of input features for the roster context.
-EMBED_DIM = 64                  # Internal dimension for all embeddings.
-TEAM_EMBED_DIM = 16             # Dimension for the draft slot embedding.
-NUM_HEADS = 4                   # Number of attention heads. Must divide EMBED_DIM.
+N_PLAYERS_WINDOW = NUM_TEAMS * 3                # Number of top available players to consider (3 rounds ahead)
+PLAYER_FEAT_DIM = 2 + 6                         # [VOR, Value, Pos_QB, Pos_RB, Pos_WR, Pos_TE, Pos_K, Pos_DST]
+ROSTER_FEAT_DIM = NUM_TEAMS * len(POSITIONS)    # Roster compositions for each team combined.
+TEAM_EMBED_DIM = 16                             # Dimension for the draft slot embedding.
+EMBED_DIM = 128                                 # Internal dimension for all embeddings.
+NUM_HEADS = 8                                   # Number of attention heads. Must divide EMBED_DIM.
+
+# --- Training Settings ---
+NUM_ENVS = 32                                                       # Number of parallel environments. CPU-bound.
+LEARNING_PHASE_EPISODES = NUM_ENVS * 100                            # Number of drafts to decay LR and Entropy over
+REFINEMENT_PHASE_EPISODES = NUM_ENVS * 10                           # Number of drafts to refine exploitation strategy over
+MAX_EPISODES = LEARNING_PHASE_EPISODES + REFINEMENT_PHASE_EPISODES  # Total number of drafts to train on
+LOG_INTERVAL = NUM_ENVS                                             # Print log every NUM_ENVS drafts
 
 # --- PPO Hyperparameters ---
 LR = 0.001                                                  # Learning Rate
@@ -36,12 +62,6 @@ UPDATE_TIMESTEP = NUM_TEAMS * NUM_ROUNDS * NUM_ENVS         # Update policy ever
 # --- Entropy Settings ---
 ENTROPY_COEF = 0.01         # Initial entropy coefficient
 ENTROPY_FINAL = 0.0         # Final entropy coefficient after decay
-
-# --- Training Settings ---
-LEARNING_PHASE_EPISODES = NUM_ENVS * 100                            # Number of drafts to decay LR and Entropy over
-REFINEMENT_PHASE_EPISODES = NUM_ENVS * 10                           # Number of drafts to refine exploitation strategy over
-MAX_EPISODES = LEARNING_PHASE_EPISODES + REFINEMENT_PHASE_EPISODES  # Total number of drafts to train on
-LOG_INTERVAL = NUM_ENVS                                             # Print log every NUM_ENVS drafts
 
 # --- Calculate Decay Rates ---
 # We calculate decay to reach FINAL values by LEARNING_PHASE_EPISODES.
