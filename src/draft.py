@@ -106,6 +106,15 @@ class DraftSimulator:
         
         self.rosters[self.current_team_idx][player_pos].append(player_data)
 
+        # If this is the team's final pick (i.e., we are in the last round), check if they filled their requirements.
+        # If they have not, penalize them.
+        if self.current_round == self.num_rounds:
+            roster = self.rosters[self.current_team_idx]
+            for pos, required_count in config.ROSTER_SLOTS.items():
+                current_count = len(roster[pos])
+                if current_count < required_count:
+                    penalty += -1.0 # Penalty for failing to meet positional requirements.
+
         # 4. Remove player from the available board
         self.available_players = self.available_players.filter(pl.col('fantasypros_id') != player_id)
 
@@ -114,13 +123,13 @@ class DraftSimulator:
         beta = 1
         reward = (alpha * player_vor) + (beta * player_value) + penalty
 
-        # 6. Advance the draft turn
+        # 7. Advance the draft turn
         self._advance_turn()
 
-        # 7. Check if the draft is over
+        # 8. Check if the draft is over
         done = self.current_round > self.num_rounds
 
-        # 8. Get the state for the *next* team
+        # 9. Get the state for the next team
         if not done:
             next_state, info = self.get_state(self.current_team_idx)
         else:
@@ -176,7 +185,12 @@ class DraftSimulator:
             opponent_counts = [float(len(self.rosters[opponent_idx][pos])) for pos in self.positions]
             opponent_roster_counts.extend(opponent_counts)
             
-        roster_features = my_roster_counts + opponent_roster_counts
+        # Calculate Draft Progress
+        total_picks = self.num_teams * self.num_rounds
+        progress = (self.current_pick - 1) / total_picks
+        
+        # Append progress to roster features
+        roster_features = my_roster_counts + opponent_roster_counts + [progress]
         roster_features_tensor = torch.tensor(roster_features, dtype=torch.float32)
 
         # 4. Generate valid_action_mask
@@ -254,8 +268,10 @@ if __name__ == '__main__':
     print(f"Team Index: {team_idx}")
     
     # Verify content
-    print("\nSample Roster Features (My Team + 1st Opponent):")
+    print("\nSample Roster Features (My Team + 1st Opponent + Progress):")
     print(roster_feats[:8])
+    print(f"Progress Feature: {roster_feats[-1]}")
+
     print("\nSample Player Features (Top Player):")
     print(player_feats[0])
     print("\nInitial Action Mask (should be all False):")

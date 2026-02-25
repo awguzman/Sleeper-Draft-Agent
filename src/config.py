@@ -10,8 +10,8 @@ import torch
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # --- Draft Settings ---
-NUM_TEAMS = 12                                      # Number of teams in the draft.
-NUM_ROUNDS = 16                                     # Number of rounds in the draft.
+NUM_TEAMS = 10                              # Number of teams in the draft.
+NUM_ROUNDS = 16                             # Number of rounds in the draft.
 # Starting slots per position on each team
 ROSTER_SLOTS = {'QB':  1,
                 'RB':  2,
@@ -39,12 +39,12 @@ ROSTER_LIMITS = {'QB':  ROSTER_SLOTS['QB'] * 2,
 POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DST']    # Standardize position abbreviations.
 
 # --- Model Architecture ---
-N_PLAYERS_WINDOW = NUM_TEAMS * 3                # Number of top available players to consider (3 rounds ahead)
-PLAYER_FEAT_DIM = 2 + 6                         # [VOR, Value, Pos_QB, Pos_RB, Pos_WR, Pos_TE, Pos_K, Pos_DST]
-ROSTER_FEAT_DIM = NUM_TEAMS * len(POSITIONS)    # Roster compositions for each team combined.
-TEAM_EMBED_DIM = 16                             # Dimension for the draft slot embedding.
-EMBED_DIM = 128                                 # Internal dimension for all embeddings.
-NUM_HEADS = 8                                   # Number of attention heads. Must divide EMBED_DIM.
+N_PLAYERS_WINDOW = 100                              # Number of top available players to consider.
+PLAYER_FEAT_DIM = 2 + 6                             # [VOR, Value, Pos_QB, Pos_RB, Pos_WR, Pos_TE, Pos_K, Pos_DST]
+ROSTER_FEAT_DIM = NUM_TEAMS * len(POSITIONS) + 1    # Roster compositions for each team + 1 for draft progress.
+TEAM_EMBED_DIM = 16                                 # Dimension for the draft slot embedding.
+EMBED_DIM = 128                                     # Internal dimension for all embeddings.
+NUM_HEADS = 8                                       # Number of attention heads. Must divide EMBED_DIM.
 
 # --- Training Settings ---
 NUM_ENVS = 50                                                       # Number of parallel environments. Lower for less than 32 GB RAM.

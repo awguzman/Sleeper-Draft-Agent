@@ -218,7 +218,13 @@ class SleeperDraftManager:
             opponent_counts = [float(len(self.rosters[opponent_idx][pos])) for pos in config.POSITIONS]
             opponent_roster_counts.extend(opponent_counts)
             
-        roster_features = my_roster_counts + opponent_roster_counts
+        # Calculate Draft Progress (0.0 to 1.0)
+        # self.current_pick_no is the number of picks already made.
+        total_picks = config.NUM_TEAMS * config.NUM_ROUNDS
+        progress = self.current_pick_no / total_picks
+        
+        # Append progress to roster features
+        roster_features = my_roster_counts + opponent_roster_counts + [progress]
         roster_features_tensor = torch.tensor(roster_features, dtype=torch.float32)
         
         # 3. Mask: Boolean tensor indicating which of the top N players are invalid picks

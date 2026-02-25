@@ -47,7 +47,14 @@ Next, install the correct version of PyTorch for your system. Visit the [officia
 
 ## Instructions
 
-This tool is designed to be customized for your specific league settings. It comes with a pre-trained model designed for use in 12 team, 16 round drafts. If you would like to use this application in other league formats, you will need to follow all steps, otherwise, you can skip to Step 3.
+This tool is designed to be customized for your specific league settings. It comes with pre-trained models designed for the following draft setups:
+
+- 10 or 12 team, 15 or 16 round, (1 QB, 2 RB, 2 WR, 1 TE, 1 FLX, 1 K, 1 DST)
+
+>[!NOTE]
+> Since rankings are always changing, these preloaded models quickly become out of date. It is always recommended that you retrain shortly before a real draft. 
+
+If you would like to use this application in other league formats, you will need to follow all steps, otherwise, you can skip to Step 3.
 
 ### Step 1: Configure Your League
 
@@ -55,12 +62,12 @@ Open `src/config.py` in a text editor. This file contains all the important sett
 
 - `NUM_TEAMS`: The number of teams in your league.
 - `NUM_ROUNDS`: The total number of rounds in your draft.
-- `ROSTER_LIMITS`: The maximum number of players allowed at each position.
-
-> **Warning**:
-> Currently, the model is only designed for leagues drafting the QB, RB, WR, and TE positions. Kicker and Defense are not supported.
+- `ROSTER_LIMITS`: The maximum number of players allowed at each position. This is the most subjective setting. Set this to your preferred team composition, adding 1 to RB and WR for flexibility.
 
 Users familiar with training RL models may also want to tune hyperparameters and training settings.
+
+>[!WARNING]
+>We use a parallelized training environment to improve convergence speeds. The current settings are optimal for 32 GB of RAM. If you have less, you will need to lower the `NUM_ENVS` value or the training will crash!
 
 ### Step 2: Train Your Agent
 
@@ -71,8 +78,8 @@ python src/train.py
 ```
 
 - The script will automatically launch **TensorBoard** for live monitoring. Open `http://localhost:6006` in your browser to view training progress (Reward, Loss, etc.).
-- Training can take a significant amount of time, depending on your hardware and the `MAX_EPISODES` setting.
-- Upon completion, a final model will be saved in the `src/models/` directory with a descriptive name, like `ppo_draft_agent_12team_16rounds.pth`.
+- Training can take some time, depending on your hardware and the `MAX_EPISODES` setting.
+- Upon completion, a final model will be saved in the `src/models/` directory with a descriptive name.
 
 ### Step 3: Get Your Sleeper Draft ID
 
