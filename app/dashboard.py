@@ -47,7 +47,7 @@ app.title = "Sleeper Draft Agent"
 # --- Markdown Content ---
 explanation_text = """
 The agent is a **Reinforcement Learning (PPO) model** trained to draft a fantasy football team. It learns by simulating 
-tens of thousands of drafts and optimizing its drafting strategy for total team value.
+thousands of drafts and optimizing its drafting strategy for total team value.
 
 The agent considers two main types of information:
 
@@ -124,7 +124,9 @@ app.layout = dbc.Container([
                 dbc.Card([
                     dbc.CardHeader("Agent Recommendation"),
                     dbc.CardBody([
-                        html.Div(id="rec-content", className="text-center")
+                        html.Div(id="rec-content", className="text-center"),
+                        html.Hr(),
+                        html.Div(id="rec-alternatives")
                     ])
                 ], className="h-100 border-success")
             ], width=8),
@@ -135,7 +137,7 @@ app.layout = dbc.Container([
             # Agent's Window (Top Available Players)
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader(f"Top {config.N_PLAYERS_WINDOW} Available"),
+                    dbc.CardHeader(f"Top 25 Players Available"),
                     dbc.CardBody([
                         html.Div(id="table-available")
                     ])
@@ -221,6 +223,7 @@ def connect_draft(n_clicks, draft_id, slot, model_path):
     [Output("status-pick-info", "children"),
      Output("status-on-clock", "children"),
      Output("rec-content", "children"),
+     Output("rec-alternatives", "children"),
      Output("table-available", "children"),
      Output("table-roster", "children")],
     [Input("interval-component", "n_intervals")]
@@ -264,23 +267,44 @@ def update_dashboard(n):
     clock_text = f"On Clock: Team {on_clock_slot}" + (" (YOU)" if is_user_turn else "")
     
     # 3. Get a recommendation from the agent for the current team on the clock
-    rec = manager.get_recommendation(on_clock_idx)
+    # Now returns a list of top-k recommendations
+    recs = manager.get_recommendation(on_clock_idx, top_k=5)
     
-    # Format the recommendation for display
+    if not recs:
+        return status_text, clock_text, "No recommendations available.", "", "", ""
+
+    top_rec = recs[0]
+    
+    # Format the top recommendation for display
     rec_display = html.Div([
-        html.H2(rec['Player'], className="display-4"),
-        html.H4(f"{rec['Pos']} • {rec['Team']}"),
-        html.Hr(),
+        html.H2(top_rec['Player'], className="display-4"),
+        html.H4(f"{top_rec['Pos']} • {top_rec['Team']}"),
+        html.H5(f"Model Confidence: {top_rec['Confidence']:.1%}", className="text-success"),
         dbc.Row([
-            dbc.Col(html.H5(f"ECR: {rec['ECR']:.2f}"), width=4),
-            dbc.Col(html.H5(f"Value: {rec['Value']:.2f}"), width=4),
-            dbc.Col(html.H5(f"VOR: {rec['VOR']:.2f}"), width=4),
+            dbc.Col(html.H5(f"ECR: {top_rec['ECR']:.2f}"), width=4),
+            dbc.Col(html.H5(f"Value: {top_rec['Value']:.2f}"), width=4),
+            dbc.Col(html.H5(f"VOR: {top_rec['VOR']:.2f}"), width=4),
         ])
     ])
     
+    # Format the alternative options table
+    if len(recs) > 1:
+        df_alts = pd.DataFrame(recs[1:])
+        # Format confidence as percentage string
+        df_alts['Confidence'] = df_alts['Confidence'].apply(lambda x: f"{x:.1%}")
+        # Select columns
+        df_alts = df_alts[['Player', 'Pos', 'Team', 'ECR', 'VOR', 'Value', 'Confidence']]
+        
+        alt_display = html.Div([
+            html.H5("Alternative Options", className="mt-3"),
+            dbc.Table.from_dataframe(df_alts, striped=True, bordered=True, hover=True, size='sm', className="text-light small")
+        ])
+    else:
+        alt_display = html.Div()
+    
     # 4. Generate data tables for display
     # Top Available Players Table
-    top_n = manager.available_players.head(config.N_PLAYERS_WINDOW)
+    top_n = manager.available_players.head(25)
     df_avail = top_n.select(['Player', 'Pos', 'Team', 'ECR', 'Value', 'VOR']).to_pandas()
     table_avail = dbc.Table.from_dataframe(df_avail, striped=True, bordered=True, hover=True, size='sm', className="text-light")
     
@@ -298,7 +322,7 @@ def update_dashboard(n):
         table_roster = html.P("No players drafted yet.")
 
     # Return all updated components
-    return status_text, clock_text, rec_display, table_avail, table_roster
+    return status_text, clock_text, rec_display, alt_display, table_avail, table_roster
 
 if __name__ == '__main__':
     # Run the Dash application

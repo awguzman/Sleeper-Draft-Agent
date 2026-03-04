@@ -155,12 +155,13 @@ class SleeperDraftManager:
         if last_pick:
              print(f"Last pick: Round {last_pick['round']}, Pick {last_pick['pick_no']}")
 
-    def get_recommendation(self, team_idx):
+    def get_recommendation(self, team_idx, top_k=5):
         """
-        Generates a draft recommendation for a given team index by running the model.
+        Generates draft recommendations for a given team index by running the model.
         
         :param team_idx: The 0-indexed team to get a recommendation for.
-        :return: A dictionary representing the recommended player's data.
+        :param top_k: Number of top recommendations to return.
+        :return: A list of dictionaries representing the recommended players and their confidence scores.
         """
         # 1. Construct the feature tensors required by the model
         roster_feats, player_feats, mask, team_idx_tensor = self._build_tensors(team_idx)
@@ -175,14 +176,35 @@ class SleeperDraftManager:
             
             action_logits, _ = self.model(roster_feats, player_feats, mask, team_idx_tensor)
             
-            # Greedily select the action with the highest logit
-            action_idx = torch.argmax(action_logits).item()
+            # Calculate probabilities (Confidence)
+            probs = torch.softmax(action_logits, dim=1)
+            
+            # Get top K actions
+            top_probs, top_indices = torch.topk(probs, k=top_k)
+            
+            top_probs = top_probs.squeeze(0).tolist()
+            top_indices = top_indices.squeeze(0).tolist()
         
-        # 3. Map the action index back to the actual player
+        # 3. Map the action indices back to the actual players
         top_n = self.available_players.head(config.N_PLAYERS_WINDOW)
-        recommended_player = top_n.row(action_idx, named=True)
         
-        return recommended_player
+        recommendations = []
+        for i, idx in enumerate(top_indices):
+            # Check if index is valid (it should be, but safety first)
+            if idx < len(top_n):
+                player_row = top_n.row(idx, named=True)
+                rec = {
+                    'Player': player_row['Player'],
+                    'Pos': player_row['Pos'],
+                    'Team': player_row['Team'],
+                    'ECR': player_row['ECR'],
+                    'VOR': player_row['VOR'],
+                    'Value': player_row['Value'],
+                    'Confidence': top_probs[i]
+                }
+                recommendations.append(rec)
+        
+        return recommendations
 
     def _build_tensors(self, team_idx):
         """
@@ -307,5 +329,5 @@ if __name__ == '__main__':
         print(f"On Clock: Team {on_clock_idx + 1} (Round {current_round}, Pick {next_pick_num})")
         
         # Get Recommendation
-        rec = manager.get_recommendation(on_clock_idx)
-        print(f"Agent Recommends: {rec['Player']} ({rec['Pos']} - VOR: {rec['VOR']:.2f})")
+        recs = manager.get_recommendation(on_clock_idx)
+        print(f"Top Recommendation: {recs[0]['Player']} ({recs[0]['Pos']}) - Conf: {recs[0]['Confidence']:.1%}")
