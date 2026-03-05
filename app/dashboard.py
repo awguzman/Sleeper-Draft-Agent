@@ -19,22 +19,8 @@ import glob
 # Add project root to path to allow importing from `app` and `src`
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app.sleeper import SleeperDraftManager
+from app.sleeper import SleeperDraftManager, get_draft_metadata
 from src import config
-
-# --- Helper Functions ---
-def get_available_models(models_dir="../src/models"):
-    """Scans the models directory for .pth files and returns them as dropdown options."""
-    if not os.path.isdir(models_dir):
-        return []
-    
-    # Find all .pth files
-    model_paths = glob.glob(os.path.join(models_dir, "*.pth"))
-    
-    # Format for dropdown: {'label': 'filename.pth', 'value': 'path/to/filename.pth'}
-    options = [{'label': os.path.basename(p), 'value': p} for p in model_paths]
-    
-    return options
 
 # --- Global State ---
 manager: SleeperDraftManager = None
@@ -76,24 +62,15 @@ app.layout = dbc.Container([
                 dbc.Col([
                     dbc.Label("Sleeper Draft ID"),
                     dbc.Input(id="input-draft-id", placeholder="Enter Draft ID...", type="text"),
-                ], width=4),
+                ], width=6),
                 dbc.Col([
                     dbc.Label("Your Draft Slot (1-12)"),
                     dbc.Input(id="input-user-slot", placeholder="1", type="number", min=1, max=12, value=1),
-                ], width=2),
-                dbc.Col([
-                    dbc.Label("Select Model"),
-                    dcc.Dropdown(
-                        id='model-dropdown', 
-                        options=get_available_models(), 
-                        placeholder="Select a model...",
-                        style={'color': 'black'}
-                    ),
-                ], width=4),
+                ], width=3),
                 dbc.Col([
                     dbc.Label(""),
                     dbc.Button("Connect", id="btn-connect", color="primary", className="w-100"),
-                ], width=2, className="d-flex align-items-end"),
+                ], width=3, className="d-flex align-items-end"),
             ]),
             html.Div(id="connection-status", className="mt-2 text-info")
         ])
@@ -176,10 +153,9 @@ app.layout = dbc.Container([
      Output("main-content", "style")],
     [Input("btn-connect", "n_clicks")],
     [State("input-draft-id", "value"),
-     State("input-user-slot", "value"),
-     State("model-dropdown", "value")]
+     State("input-user-slot", "value")]
 )
-def connect_draft(n_clicks, draft_id, slot, model_path):
+def connect_draft(n_clicks, draft_id, slot):
     """
     Callback triggered by the 'Connect' button.
     Initializes the SleeperDraftManager, sets the user's slot, and shows the main content area.
@@ -187,7 +163,6 @@ def connect_draft(n_clicks, draft_id, slot, model_path):
     :param n_clicks: Number of times the connect button has been clicked.
     :param draft_id: The ID of the Sleeper draft entered by the user.
     :param slot: The user's draft slot (1-12) entered by the user.
-    :param model_path: The path to the selected model file from the dropdown.
     :return: A tuple containing the connection status message/alert and the style for the main content div.
     """
     global manager, user_slot
@@ -199,22 +174,47 @@ def connect_draft(n_clicks, draft_id, slot, model_path):
     if not draft_id:
         return dbc.Alert("Please enter a Draft ID.", color="danger"), {"display": "none"}
     
-    if not model_path:
-        return dbc.Alert("Please select a model.", color="danger"), {"display": "none"}
+    # Try to auto-detect model from Draft Metadata
+    metadata = get_draft_metadata(draft_id)
+    final_model_path = None
     
-    try:
-        if not os.path.exists(model_path):
-             return dbc.Alert(f"Error: Model not found at {model_path}", color="danger"), {"display": "none"}
+    if metadata:
+        num_teams = metadata['num_teams']
+        num_rounds = metadata['num_rounds']
+        roster_slots = metadata['roster_slots']
+        auto_model_name = f"draft_agent_{num_teams}team_{num_rounds}rounds_{roster_slots['QB']}QB_{roster_slots['RB']}RB_{roster_slots['WR']}WR_{roster_slots['TE']}TE_{roster_slots['K']}K_{roster_slots['DST']}DST.pth"
+        auto_model_path = os.path.join("..", "src", "models", auto_model_name)
 
+        if os.path.exists(auto_model_path):
+            final_model_path = auto_model_path
+            print(f"Auto-detected model: {final_model_path}")
+        else:
+            print(f"Auto-detected model not found: {auto_model_path}")
+            # Construct detailed error message
+            roster_str = ", ".join([f"'{k}': {v}" for k, v in roster_slots.items() if v > 0])
+            error_msg = (
+                f"Model not found for this draft configuration ({num_teams} teams, {num_rounds} rounds, Starters: {roster_slots['QB']} QB, {roster_slots['RB']} RB, {roster_slots['WR']} WR, {roster_slots['TE']} TE, {roster_slots['K']} K, {roster_slots['DST']} DST).\n"
+                f"Please train a model for this draft scenario as described in the ReadMe.\n"
+                f"\nBe sure to use the following settings in src/config.py:\n"
+                f"\nNUM_TEAMS = {num_teams},\n"
+                f"\nNUM_ROUNDS = {num_rounds},\n"
+                f"\nROSTER_SLOTS = {{{roster_str}}}"
+            )
+            return dbc.Alert(dcc.Markdown(error_msg), color="danger"), {"display": "none"}
+    else:
+        return dbc.Alert("Could not fetch draft data from Sleeper. Please check the Draft ID.", color="danger"), {"display": "none"}
+
+    try:
         # Initialize the backend manager
-        manager = SleeperDraftManager(draft_id, model_path)
+        manager = SleeperDraftManager(draft_id, final_model_path)
         user_slot = int(slot)
         
         # Perform an initial state update
         manager.update_state()
         
         # Show the main content and a success message
-        return dbc.Alert(f"Successfully connected to draft {draft_id}!", color="success"), {"display": "block"}
+        return dbc.Alert(f"Successfully connected to draft! Loaded draft agent configured for {num_teams} teams, {num_rounds} rounds, and with starters: {roster_slots['QB']} QB, {roster_slots['RB']} RB, {roster_slots['WR']} WR, {roster_slots['TE']} TE, {roster_slots['K']} K, {roster_slots['DST']} DST.",
+                         color="success"), {"display": "block"}
     except Exception as e:
         # Display error if connection or initialization fails
         return dbc.Alert(f"Connection failed: {str(e)}", color="danger"), {"display": "none"}

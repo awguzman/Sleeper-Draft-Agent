@@ -20,6 +20,37 @@ from src import config
 from src.agent import DraftAgent
 from src.board import create_board
 
+def get_draft_metadata(draft_id):
+    """
+    Fetches metadata for a specific draft from the Sleeper API.
+
+    :param draft_id: The ID of the Sleeper draft.
+    :return: A dictionary containing key draft settings, or None if the request fails.
+    """
+    url = f"https://api.sleeper.app/v1/draft/{draft_id}"
+    response = requests.get(url)
+    if response.status_code != 200:
+        print(f"Error fetching draft metadata: {response.status_code}")
+        return None
+    
+    data = response.json()
+    settings = data.get('settings', {})
+    
+    # Extract relevant settings
+    metadata = {
+        'num_teams': settings.get('teams'),
+        'num_rounds': settings.get('rounds'),
+        'roster_slots': {
+            'QB': settings.get('slots_qb', 0),
+            'RB': settings.get('slots_rb', 0),
+            'WR': settings.get('slots_wr', 0),
+            'TE': settings.get('slots_te', 0),
+            'K': settings.get('slots_k', 0),
+            'DST': settings.get('slots_def', 0) # Sleeper uses 'def' for DST
+        }
+    }
+    return metadata
+
 class SleeperDraftManager:
     """
     Manages the connection to a live Sleeper draft, tracks the state,
