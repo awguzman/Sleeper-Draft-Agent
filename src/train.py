@@ -102,12 +102,12 @@ class PPO:
 
         # Check for all-masked logits (all -inf)
         # This only happens if the agent has no available actions (e.g. only needs positions not in their current board)
-        # Should be fixed but leaving this until we are sure
-        if (action_logits == float('-inf')).all(dim=1).any():
-            bad_indices = (action_logits == float('-inf')).all(dim=1).nonzero(as_tuple=True)[0]
-            print(f"Bad indices in batch: {bad_indices}")
-            print(f"Mask for first bad index: {mask[bad_indices[0]]}")
-            raise ValueError("All actions are masked for at least one environment!")
+        # Should be fixed by the Failsafe mechanism, but leaving this until we are sure.
+        # if (action_logits == float('-inf')).all(dim=1).any():
+        #     bad_indices = (action_logits == float('-inf')).all(dim=1).nonzero(as_tuple=True)[0]
+        #     print(f"Bad indices in batch: {bad_indices}")
+        #     print(f"Mask for first bad index: {mask[bad_indices[0]]}")
+        #     raise ValueError("All actions are masked for at least one environment!")
 
         # Create a categorical distribution and sample actions
         dist = Categorical(logits=action_logits)
@@ -129,7 +129,6 @@ class PPO:
         """
         Updates the policy using the collected experiences in memory.
         """
-
         # --- Decay Hyperparameters ---
         new_lr = config.LR - (config.LR_DECAY_RATE * current_episode)
         new_lr = max(new_lr, config.LR_FINAL)
@@ -140,7 +139,7 @@ class PPO:
         new_entropy_coef = max(new_entropy_coef, config.ENTROPY_FINAL)
 
         # --- Masked Reward Calculation (Per-Team Returns) ---
-        # Stack lists into tensors: (num_steps, num_envs)
+        # Shape: (num_steps, num_envs)
         all_rewards = torch.stack(memory.rewards).to(config.DEVICE)
         all_terminals = torch.stack(memory.is_terminals).to(config.DEVICE)
         all_teams = torch.stack(memory.states_team).to(config.DEVICE)
@@ -153,20 +152,19 @@ class PPO:
         # Iterate over each team to calculate their independent discounted returns
         for team_idx in range(config.NUM_TEAMS):
             # Create a mask for when this team was acting
-            # Shape: (num_steps, num_envs)
+            # Non-zero rows only corresponding to this team's steps.
             team_mask = (all_teams == team_idx).float()
             
-            # Extract rewards ONLY for this team (zero out others)
+            # Extract rewards ONLY for this team (zero out other rows)
             team_rewards = all_rewards * team_mask
             
             running_return = torch.zeros(num_envs).to(config.DEVICE)
             
-            # Iterate backwards
+            # Iterate backwards through steps in the vectorized environments.
             for t in reversed(range(num_steps)):
                 # If terminal, reset return
                 running_return = running_return * (1 - all_terminals[t].float())
-                
-                # Accumulate return
+
                 # If it's this team's turn, team_rewards[t] is the reward, otherwise 0.
                 # The discount gamma applies to every time step.
                 running_return = team_rewards[t] + self.gamma * running_return
@@ -176,7 +174,6 @@ class PPO:
                 returns[t] += running_return * team_mask[t]
         
         # Flatten the returns tensor for PPO update
-        # Shape: (num_steps * num_envs)
         returns = returns.view(-1)
         
         # Normalize returns
@@ -387,13 +384,13 @@ def train():
     torch.save(ppo_agent.policy.state_dict(), final_model_path)
     print(f"Training Complete. Final model saved at {final_model_path}")
 
+    # Close environments and logging
+    vec_env.close()
+    writer.close()
+
     # Run test draft for final model
     print(f"Running a test draft for the trained model:")
     run_test_draft(final_model_path)
-
-
-    vec_env.close()
-    writer.close()
 
 if __name__ == '__main__':
     train()

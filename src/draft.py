@@ -12,8 +12,7 @@ class DraftSimulator:
     """
     A simulated fantasy football draft environment for training RL agents.
 
-    This class manages the state of the draft, including the draft board,
-    team rosters, and turn order.
+    This class manages the state of the draft, including the draft board, team rosters, and turn order.
     """
     def __init__(self, num_teams=config.NUM_TEAMS,
                  num_rounds=config.NUM_ROUNDS,
@@ -26,7 +25,6 @@ class DraftSimulator:
         :param num_rounds: The total number of draft rounds.
         :param n_players_window: The number of top available players to include in the state.
         :param roster_limits: A dictionary defining the max number of players per position.
-                              e.g., {'QB': 2, 'RB': 6, 'WR': 7, 'TE': 2}
         """
 
         self.num_teams = num_teams
@@ -47,8 +45,8 @@ class DraftSimulator:
         ]
 
         # State variables to track draft progress
-        self.current_round = 0
-        self.current_pick = 0
+        self.current_round = 1
+        self.current_pick = 1
         self.current_team_idx = 0   # Will be 0-indexed
 
     def reset(self):
@@ -77,14 +75,14 @@ class DraftSimulator:
         :return: A tuple of (next_state, reward, done, info).
         """
         # 1. Get the actual player from the action index
-        # The action is an integer (0, N-1) corresponding to the index in the current available_players window
-        top_n = self.available_players.head(self.n_players_window)
-        
-        if action >= len(top_n):
-             # This should be handled by masking, but as a safeguard:
-             raise ValueError(f"Action {action} is out of bounds for available players {len(top_n)}")
+        top_available = self.available_players.head(self.n_players_window)
 
-        player_row = top_n.row(action, named=True)
+        # The action is an integer (0, N-1) corresponding to the index in the current available_players window
+        if action >= len(top_available):
+             # This shouldn't happen, but as a safeguard:
+             raise ValueError(f"Action {action} is out of bounds for available players {len(top_available)}")
+
+        player_row = top_available.row(action, named=True)
         player_id = player_row['fantasypros_id']
         player_pos = player_row['Pos']
         player_vor = player_row['VOR']
@@ -119,8 +117,8 @@ class DraftSimulator:
         self.available_players = self.available_players.filter(pl.col('fantasypros_id') != player_id)
 
         # 5. Calculate reward
-        alpha = 1
-        beta = 1
+        alpha = 1   # Reduce this to make the agent prioritize ranking
+        beta = 1    # Reduce this to make the agent prioritize positional scarcity
         reward = (alpha * player_vor) + (beta * player_value) + penalty
 
         # 7. Advance the draft turn
@@ -130,11 +128,7 @@ class DraftSimulator:
         done = self.current_round > self.num_rounds
 
         # 9. Get the state for the next team
-        if not done:
-            next_state, info = self.get_state(self.current_team_idx)
-        else:
-            # If done, returning the last state for value estimation.
-            next_state, info = self.get_state(self.current_team_idx) 
+        next_state, info = self.get_state(self.current_team_idx)
 
         return next_state, reward, done, info
 
@@ -153,7 +147,7 @@ class DraftSimulator:
         # 2. Construct player_features tensor
         player_features = []
 
-        # Map positions to indices: QB=0, RB=1, WR=2, TE=3
+        # Map positions to indices: QB=0, RB=1, WR=2, etc.
         pos_map = {pos: i for i, pos in enumerate(self.positions)}
 
         # One-hot encode positions.
@@ -161,12 +155,11 @@ class DraftSimulator:
             pos_one_hot = [0.0] * len(self.positions)
             if row['Pos'] in pos_map:
                 pos_one_hot[pos_map[row['Pos']]] = 1.0
-            
-            # Feature vector: [VOR, Value, QB, RB, WR, TE]
+
             features = [row['VOR'], row['Value']] + pos_one_hot
             player_features.append(features)
         
-        # Pad if fewer than N players are available (this should never happen unless num_rounds is too large)
+        # Pad if fewer than N players are available (this should never happen unless num_rounds is stupid large)
         # We pad with 0s. The mask will ensure these aren't selected.
         while len(player_features) < self.n_players_window:
             player_features.append([0.0] * (2 + len(self.positions)))
@@ -194,7 +187,6 @@ class DraftSimulator:
         roster_features_tensor = torch.tensor(roster_features, dtype=torch.float32)
 
         # 4. Generate valid_action_mask
-        # Mask is True for invalid actions
         valid_action_mask = []
         my_current_counts = {pos: len(self.rosters[team_idx][pos]) for pos in self.positions}
         
@@ -226,7 +218,7 @@ class DraftSimulator:
         team_idx_tensor = torch.tensor(team_idx, dtype=torch.long)
 
         state = (roster_features_tensor, player_features_tensor, valid_action_mask_tensor, team_idx_tensor)
-        info = {'failsafe_triggered': failsafe_triggered}
+        info = {'failsafe_triggered': failsafe_triggered}   # Used for debug logging.
         
         return state, info
 
@@ -253,33 +245,3 @@ class DraftSimulator:
             # Even Rounds: 11 -> 0
             self.current_team_idx = self.num_teams - 1 - pick_in_round
 
-
-# --- Debug Zone ---
-if __name__ == '__main__':
-    simulator = DraftSimulator()
-    state, info = simulator.reset()
-    roster_feats, player_feats, mask, team_idx = state
-    
-    print(f"Draft Initialized for {simulator.num_teams} teams and {simulator.num_rounds} rounds.")
-    print("\nInitial State Tensors:")
-    print(f"Roster Features Shape: {roster_feats.shape}")
-    print(f"Player Features Shape: {player_feats.shape}")
-    print(f"Action Mask Shape: {mask.shape}")
-    print(f"Team Index: {team_idx}")
-    
-    # Verify content
-    print("\nSample Roster Features (My Team + 1st Opponent + Progress):")
-    print(roster_feats[:8])
-    print(f"Progress Feature: {roster_feats[-1]}")
-
-    print("\nSample Player Features (Top Player):")
-    print(player_feats[0])
-    print("\nInitial Action Mask (should be all False):")
-    print(mask)
-    
-    # Test Step
-    print("\n--- Testing Step (Drafting Player 0) ---")
-    next_state, reward, done, _ = simulator.step(0)
-    print(f"Reward: {reward}")
-    print(f"Done: {done}")
-    print(f"Next Team Index: {simulator.current_team_idx}")

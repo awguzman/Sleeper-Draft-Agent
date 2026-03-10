@@ -31,7 +31,7 @@ def create_board(preprocess: bool = False) -> pl.DataFrame:
     # Filter out non-fantasy positions.
     board_df = board_df.filter(pl.col('pos').is_in(config.POSITIONS))
 
-    # Filter for overall redraft rankings.
+    # Filter for redraft overall ('ro') rankings.
     board_df = board_df.filter(pl.col('ecr_type') == 'ro').drop('ecr_type')
 
     # Get rid of the defensive rankings for two-way players (e.g. Travis Hunter)
@@ -51,7 +51,7 @@ def create_board(preprocess: bool = False) -> pl.DataFrame:
         'sd': 'Std'
     })
 
-    # Perform training preprocessing if asked
+    # Perform training preprocessing if requested.
     if preprocess:
         board_df = process_board(board_df)
 
@@ -70,9 +70,7 @@ def process_board(board_df: pl.DataFrame) -> pl.DataFrame:
 
     # --- Invert and normalize ECR rankings ---
     max_ecr = board_df['ECR'].max()
-    processed_df = board_df.with_columns(
-        ((max_ecr - pl.col('ECR')) / max_ecr).round(5).alias('Value')
-    )
+    processed_df = board_df.with_columns(((max_ecr - pl.col('ECR')) / max_ecr).round(5).alias('Value'))
 
     # --- Compute Value over Replacement (VOR) ---
     replacement_cutoffs = config.REPLACEMENT_CUTOFFS

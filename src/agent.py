@@ -12,16 +12,11 @@ class DraftAgent(nn.Module):
     PPO Agent with Cross-Attention Architecture.
 
     This agent processes two distinct streams of information:
-    1. The "Team Overview" (Roster State): What positions do I need? What are my opponents doing?
-    2. The "Draft Board" (Player Pool): Who are the top N available players?
-
-    Architecture Flow:
-    - Encoders: Translate raw numbers (player counts, VOR) into vector representations.
-    - Cross-Attention: Uses the Roster state (Query) to highlight relevant Players (Keys/Values) based on team needs.
-    - Critic Head: Estimates the value of the current state.
-    - Actor Head: Scores each specific player to make a draft pick.
+    1. The "Team Overview" (Draft State): Draft slot + draft progress + agents roster + opponents rosters.
+    2. The "Draft Board" (Player Pool): Top N available players to pick from.
     """
-    def __init__(self, n_players_window=config.N_PLAYERS_WINDOW, 
+    def __init__(self,
+                 n_players_window=config.N_PLAYERS_WINDOW,
                  player_feat_dim=config.PLAYER_FEAT_DIM, 
                  roster_feat_dim=config.ROSTER_FEAT_DIM,
                  embed_dim=config.EMBED_DIM, 
@@ -39,12 +34,12 @@ class DraftAgent(nn.Module):
         self.n_players_window = n_players_window
 
         # --- Team/Slot Embedding ---
-        # Learns a unique vector for each of the 12 draft slots.
+        # Learns a unique vector for each of the NUM_TEAMS draft slots.
         # This allows the agent to learn slot-specific strategies.
         self.team_embedding = nn.Embedding(config.NUM_TEAMS, team_embed_dim)
 
         # --- Roster/Context Encoder ---
-        # Input: Roster counts + Team Embedding (roster_feat_dim + team_embed_dim)
+        # Input: Roster counts + Team Embedding
         # Output: A "Query" vector representing the team's specific needs and the overall draft landscape.
         self.roster_encoder = nn.Sequential(
             nn.Linear(roster_feat_dim + team_embed_dim, embed_dim),
@@ -76,7 +71,7 @@ class DraftAgent(nn.Module):
 
         # --- Actor Head ---
         # Assigns a specific score (logit) to each of the N top players.
-        # Combines a player's specific quality with the Team's general context.
+        # Combines a player's specific quality with the draft's context.
         self.actor_head = nn.Sequential(
             nn.Linear(embed_dim, embed_dim),
             nn.ReLU(),
@@ -98,25 +93,21 @@ class DraftAgent(nn.Module):
         """
 
         # 1. Team Embedding
-        team_emb = self.team_embedding(team_idx) # (Batch, Team_Embed_Dim)
+        team_emb = self.team_embedding(team_idx)
 
         # 2. Feature Encoding
-        # Concatenate Roster Features with Team Embedding
-        # Shape: (Batch, Roster_Feat_Dim + Team_Embed_Dim)
+        # Concatenate roster features with team embedding to get general draft context.
         combined_roster_features = torch.cat([roster_features, team_emb], dim=1)
 
-        # Convert the Roster state into a Query vector.
-        # Shape: (Batch, 1, Embed_Dim)
+        # Convert the roster state into a roster vector.
         roster_emb = self.roster_encoder(combined_roster_features).unsqueeze(1)
 
-        # Convert the N Players into Key/Value vectors.
-        # Shape: (Batch, N, Embed_Dim)
+        # Convert the N Players into player vectors.
         player_emb = self.player_encoder(player_features)
 
         # 3. Cross-Attention
-        # Looks at the Roster (Query) vector to highlight the Players (Keys) vectors that align with team needs.
-        # attn_output represents the "Context vector" of the board filtered by needs.
-        # Shape: (Batch, 1, Embed_Dim)
+        # Looks at the roster vector to "highlight" the player vectors that align with team needs.
+        # Creates a context vector representing the board filtered by positional needs and draft situation.
         attn_output, _ = self.attention(
             query=roster_emb,
             key=player_emb,
@@ -125,23 +116,18 @@ class DraftAgent(nn.Module):
         )
 
         # 4. Critic Evaluation
-        # The Critic looks at the Context Vector to estimate how "good" this situation is.
+        # The Critic looks at the context vector to estimate how "good" a particular situation is.
         context_vector = attn_output.squeeze(1)
         state_value = self.critic_head(context_vector)
 
         # 5. Actor Decision
-        # Combine the "Global Context" (roster_emb) with the "Local Features" (player_emb).
-        # roster_emb (Batch, 1, Dim) is added to every player in player_emb (Batch, N, Dim).
+        # Combine the roster vector with the player vectors.
         actor_input = player_emb + roster_emb
 
         # Pass the combined features through the Actor to get a score for each player.
-        # Shape: (Batch, N, 1)
         action_scores = self.actor_head(actor_input)
-
-        # Squeeze to get a flat list of logits: (Batch, N)
         action_logits = action_scores.squeeze(-1)
 
-        # 6. Action Masking
         # If a player is invalid (e.g., position limit reached),
         # set their logit to negative infinity so the probability of being picked becomes 0.
         if mask is not None:

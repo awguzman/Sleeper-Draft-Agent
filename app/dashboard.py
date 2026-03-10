@@ -1,11 +1,7 @@
 """
 This module defines the Dash application for the Sleeper Draft Agent dashboard.
 
-It provides a web-based user interface to:
-- Connect to a live Sleeper mock draft.
-- View the current state of the draft (status, rosters).
-- See the top available players as viewed by the agent.
-- Receive a real-time draft recommendation from the trained PPO model when it's the user's turn.
+It acts as the front end, providing the user with a full on AI-based decision system.
 """
 
 import dash
@@ -14,7 +10,6 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 import sys
 import os
-import glob
 
 # Add project root to path to allow importing from `app` and `src`
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -25,6 +20,7 @@ from src import config
 # --- Global State ---
 manager: SleeperDraftManager = None
 user_slot: int = None
+num_teams: int = None
 
 # --- App Initialization ---
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
@@ -165,7 +161,7 @@ def connect_draft(n_clicks, draft_id, slot):
     :param slot: The user's draft slot (1-12) entered by the user.
     :return: A tuple containing the connection status message/alert and the style for the main content div.
     """
-    global manager, user_slot
+    global manager, user_slot, num_teams
     
     if not n_clicks:
         # Initial load, do nothing
@@ -240,34 +236,33 @@ def update_dashboard(n):
     :param n: The number of times the interval has fired.
     :return: A tuple of updated children for the respective Output components.
     """
-    global manager, user_slot
+    global manager, user_slot, num_teams
     
-    # If manager is not initialized (not connected yet), do nothing
+    # If manager is not initialized, do nothing
     if not manager:
         return dash.no_update
-    
-    # 1. Poll the API for the latest draft state
+
+    # Poll the API for the latest draft state
     manager.update_state()
-    
-    # 2. Calculate current draft status (round, pick, on-the-clock team)
+
+    # Calculate current draft status (round, pick, on-the-clock team)
     next_pick_num = manager.current_pick_no + 1
-    current_round = ((next_pick_num - 1) // config.NUM_TEAMS) + 1
-    pick_in_round = (next_pick_num - 1) % config.NUM_TEAMS
+    current_round = ((next_pick_num - 1) // num_teams) + 1
+    pick_in_round = (next_pick_num - 1) % num_teams
     
     # Determine who is on the clock using snake draft logic
     if current_round % 2 == 1:
         on_clock_idx = pick_in_round
     else:
-        on_clock_idx = config.NUM_TEAMS - 1 - pick_in_round
+        on_clock_idx = num_teams - 1 - pick_in_round
         
-    on_clock_slot = on_clock_idx + 1 # Convert to 1-indexed slot for display
+    on_clock_slot = on_clock_idx + 1 # Convert to 1-indexed for display
     is_user_turn = (on_clock_slot == user_slot)
     
     status_text = f"Round {current_round} • Pick {next_pick_num} (Overall)"
     clock_text = f"On Clock: Team {on_clock_slot}" + (" (YOU)" if is_user_turn else "")
     
-    # 3. Get a recommendation from the agent for the current team on the clock
-    # Now returns a list of top-k recommendations
+    # Get a recommendations from the agent for the current team on the clock
     recs = manager.get_recommendation(on_clock_idx, top_k=5)
     
     if not recs:
@@ -301,8 +296,7 @@ def update_dashboard(n):
         ])
     else:
         alt_display = html.Div()
-    
-    # 4. Generate data tables for display
+
     # Top Available Players Table
     top_n = manager.available_players.head(25)
     df_avail = top_n.select(['Player', 'Pos', 'Team', 'ECR', 'Value', 'VOR']).to_pandas()
@@ -321,7 +315,6 @@ def update_dashboard(n):
     else:
         table_roster = html.P("No players drafted yet.")
 
-    # Return all updated components
     return status_text, clock_text, rec_display, alt_display, table_avail, table_roster
 
 if __name__ == '__main__':
