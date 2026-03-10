@@ -6,6 +6,7 @@ It prints detailed information about each pick to help analyze the model's strat
 import torch
 import os
 import sys
+import re
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -15,19 +16,35 @@ from src.draft import DraftSimulator
 from src.agent import DraftAgent
 
 def run_test_draft(model_path):
+    """
+    Loads a model and runs a full draft simulation, printing detailed results.
+    """
     print(f"--- Starting Test Draft with Model: {model_path} ---")
-    
-    # 1. Initialize Environment
-    env = DraftSimulator()
+
+    #  Parse model filename to get draft configuration
+    match = re.search(r'(\d+)team_(\d+)rounds', model_path)
+    if not match:
+        print(f"Error: Could not parse num_teams and num_rounds from model filename: {model_path}")
+        return
+
+    num_teams = int(match.group(1))
+    num_rounds = int(match.group(2))
+
+    # Initialize environment
+    env = DraftSimulator(num_teams=num_teams, num_rounds=num_rounds)
     state, info = env.reset()
     roster_feats, player_feats, mask, team_idx = state
     
-    # 2. Load Model
-    device = torch.device("cpu") # CPU is fine for single inference
+    # 3. Load model
+    device = torch.device("cpu") # CPU for single inference
+    
+    # Calculate roster_feat_dim based on parsed num_teams
+    roster_feat_dim = num_teams * len(config.POSITIONS) + 1
+    
     model = DraftAgent(
         n_players_window=config.N_PLAYERS_WINDOW,
         player_feat_dim=config.PLAYER_FEAT_DIM,
-        roster_feat_dim=config.ROSTER_FEAT_DIM,
+        roster_feat_dim=roster_feat_dim,
         embed_dim=config.EMBED_DIM,
         team_embed_dim=config.TEAM_EMBED_DIM
     ).to(device)
@@ -36,6 +53,7 @@ def run_test_draft(model_path):
         print(f"Error: Model not found at {model_path}")
         return
 
+    # Load weights
     state_dict = torch.load(model_path, map_location=device)
     model.load_state_dict(state_dict)
     model.eval()
@@ -44,12 +62,11 @@ def run_test_draft(model_path):
     print(f"{'Pick':<8} | {'Team':<5} | {'Pos':<4} | {'Player':<25} | {'VOR':<6} | {'Value':<6} | {'Roster State'}")
     print("-" * 100)
 
-    total_picks = config.NUM_TEAMS * config.NUM_ROUNDS
-    team_rewards = [0.0] * config.NUM_TEAMS
+    total_picks = num_teams * num_rounds
+    team_rewards = [0.0] * num_teams
     
     for pick_num in range(1, total_picks + 1):
         # Prepare inputs
-        # Add batch dimension
         roster_feats_t = roster_feats.unsqueeze(0).to(device)
         player_feats_t = player_feats.unsqueeze(0).to(device)
         mask_t = mask.unsqueeze(0).to(device)
@@ -58,8 +75,6 @@ def run_test_draft(model_path):
         # Inference
         with torch.no_grad():
             action_logits, value_est = model(roster_feats_t, player_feats_t, mask_t, team_idx_t)
-            
-            # Greedy selection
             action = torch.argmax(action_logits).item()
 
         top_n = env.available_players.head(config.N_PLAYERS_WINDOW)
@@ -68,33 +83,28 @@ def run_test_draft(model_path):
         # Execute Step
         (next_roster_feats, next_player_feats, next_mask, next_team_idx), reward, done, info = env.step(action)
         
-        # Snake draft logic to find who just picked
-        # pick_num is 1-based.
-        # Round 1: 1->0, 2->1 ...
+        # Snake draft logic
         round_num = ((pick_num - 1) // config.NUM_TEAMS) + 1
         pick_in_round = (pick_num - 1) % config.NUM_TEAMS
         
         if round_num % 2 == 1:
             just_picked_idx = pick_in_round
         else:
-            just_picked_idx = config.NUM_TEAMS - 1 - pick_in_round
+            just_picked_idx = num_teams - 1 - pick_in_round
             
         # Update team reward
         team_rewards[just_picked_idx] += reward
             
-        # Construct roster string (e.g., "QB:1 RB:2...")
+        # Construct roster string
         roster = env.rosters[just_picked_idx]
         roster_str = " ".join([f"{pos}:{len(players)}" for pos, players in roster.items()])
         
-        # Print Pick Info
+        # Print pick info
         pick_str = f"{round_num}.{str(pick_in_round + 1).zfill(2)}"
         print(f"{pick_str:<8} | T{just_picked_idx+1:<4} | {picked_player['Pos']:<4} | {picked_player['Player']:<25} | {picked_player['VOR']:<6.2f} | {picked_player['Value']:<6.2f} | {roster_str}")
 
         # Update state
-        roster_feats = next_roster_feats
-        player_feats = next_player_feats
-        mask = next_mask
-        team_idx = next_team_idx
+        roster_feats, player_feats, mask, team_idx = next_roster_feats, next_player_feats, next_mask, next_team_idx
         
         if done:
             break
