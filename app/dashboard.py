@@ -10,21 +10,27 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 import sys
 import os
+import functools
 
 # Add project root to path to allow importing from `app` and `src`
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.sleeper import SleeperDraftManager, get_draft_metadata
-from src import config
-
-# --- Global State ---
-manager: SleeperDraftManager = None
-user_slot: int = None
-num_teams: int = None
 
 # --- App Initialization ---
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
 app.title = "Sleeper Draft Agent"
+
+# --- Memoized Function for Manager Creation ---
+@functools.lru_cache(maxsize=10)
+def load_draft_manager(draft_id, model_path):
+    """
+    Creates and returns a SleeperDraftManager instance.
+    This function is memoized to ensure that the expensive model loading
+    and object creation only happens once per draft_id/model_path combination.
+    """
+    print(f"--- Cache: Creating new manager for draft {draft_id} ---")
+    return SleeperDraftManager(draft_id, model_path)
 
 # --- Markdown Content ---
 explanation_text = """
@@ -46,6 +52,9 @@ the current draft context. It should not replace the users own judgement.
 
 # --- Layout ---
 app.layout = dbc.Container([
+    # Client-side storage for session data
+    dcc.Store(id='session-data', storage_type='session'),
+
     # Header
     dbc.Row([
         dbc.Col(html.H1("Sleeper Draft Agent", className="text-center my-4"), width=12)
@@ -76,7 +85,7 @@ app.layout = dbc.Container([
     html.Div(id="main-content", style={"display": "none"}, children=[
         
         # Interval component to trigger updates periodically
-        dcc.Interval(id="interval-component", interval=10000, n_intervals=0), # Polls every 10 seconds
+        dcc.Interval(id="interval-component", interval=10000, n_intervals=0, disabled=True), # Initially disabled
 
         # Top Row: Live status and the agent's recommendation
         dbc.Row([
@@ -145,8 +154,10 @@ app.layout = dbc.Container([
 # --- Callbacks ---
 
 @app.callback(
-    [Output("connection-status", "children"),
-     Output("main-content", "style")],
+    [Output("session-data", "data"),
+     Output("connection-status", "children"),
+     Output("main-content", "style"),
+     Output("interval-component", "disabled")],
     [Input("btn-connect", "n_clicks")],
     [State("input-draft-id", "value"),
      State("input-user-slot", "value")]
@@ -154,66 +165,53 @@ app.layout = dbc.Container([
 def connect_draft(n_clicks, draft_id, slot):
     """
     Callback triggered by the 'Connect' button.
-    Initializes the SleeperDraftManager, sets the user's slot, and shows the main content area.
-    
-    :param n_clicks: Number of times the connect button has been clicked.
-    :param draft_id: The ID of the Sleeper draft entered by the user.
-    :param slot: The user's draft slot (1-12) entered by the user.
-    :return: A tuple containing the connection status message/alert and the style for the main content div.
+
+    Validates the draft, finds the model, and saves session data to the dcc.Store.
     """
-    global manager, user_slot, num_teams
-    
     if not n_clicks:
         # Initial load, do nothing
-        return "", {"display": "none"}
+        return dash.no_update, "", {"display": "none"}, True
     
     if not draft_id:
-        return dbc.Alert("Please enter a Draft ID.", color="danger"), {"display": "none"}
+        return dash.no_update, dbc.Alert("Please enter a Draft ID.", color="danger"), {"display": "none"}, True
     
     # Try to auto-detect model from Draft Metadata
     metadata = get_draft_metadata(draft_id)
-    final_model_path = None
     
-    if metadata:
-        num_teams = metadata['num_teams']
-        num_rounds = metadata['num_rounds']
-        roster_slots = metadata['roster_slots']
-        auto_model_name = f"draft_agent_{num_teams}team_{num_rounds}rounds_{roster_slots['QB']}QB_{roster_slots['RB']}RB_{roster_slots['WR']}WR_{roster_slots['TE']}TE_{roster_slots['K']}K_{roster_slots['DST']}DST.pth"
-        auto_model_path = os.path.join("..", "src", "models", auto_model_name)
+    if not metadata:
+        return dash.no_update, dbc.Alert("Could not fetch draft data from Sleeper. Please check the Draft ID.", color="danger"), {"display": "none"}, True
 
-        if os.path.exists(auto_model_path):
-            final_model_path = auto_model_path
-            print(f"Auto-detected model: {final_model_path}")
-        else:
-            print(f"Auto-detected model not found: {auto_model_path}")
-            # Construct detailed error message
-            roster_str = ", ".join([f"'{k}': {v}" for k, v in roster_slots.items() if v > 0])
-            error_msg = (
-                f"Model not found for this draft configuration ({num_teams} teams, {num_rounds} rounds, Starters: {roster_slots['QB']} QB, {roster_slots['RB']} RB, {roster_slots['WR']} WR, {roster_slots['TE']} TE, {roster_slots['K']} K, {roster_slots['DST']} DST).\n"
-                f"Please train a model for this draft scenario as described in the ReadMe.\n"
-                f"\nBe sure to use the following settings in src/config.py:\n"
-                f"\nNUM_TEAMS = {num_teams},\n"
-                f"\nNUM_ROUNDS = {num_rounds},\n"
-                f"\nROSTER_SLOTS = {{{roster_str}}}"
-            )
-            return dbc.Alert(dcc.Markdown(error_msg), color="danger"), {"display": "none"}
-    else:
-        return dbc.Alert("Could not fetch draft data from Sleeper. Please check the Draft ID.", color="danger"), {"display": "none"}
+    num_teams = metadata['num_teams']
+    num_rounds = metadata['num_rounds']
+    roster_slots = metadata['roster_slots']
+    auto_model_name = f"draft_agent_{num_teams}team_{num_rounds}rounds_{roster_slots['QB']}QB_{roster_slots['RB']}RB_{roster_slots['WR']}WR_{roster_slots['TE']}TE_{roster_slots['K']}K_{roster_slots['DST']}DST.pth"
+    auto_model_path = os.path.join("..", "src", "models", auto_model_name)
 
-    try:
-        # Initialize the backend manager
-        manager = SleeperDraftManager(draft_id, final_model_path)
-        user_slot = int(slot)
-        
-        # Perform an initial state update
-        manager.update_state()
-        
-        # Show the main content and a success message
-        return dbc.Alert(f"Successfully connected to draft! Loaded draft agent configured for {num_teams} teams, {num_rounds} rounds, and with starters: {roster_slots['QB']} QB, {roster_slots['RB']} RB, {roster_slots['WR']} WR, {roster_slots['TE']} TE, {roster_slots['K']} K, {roster_slots['DST']} DST.",
-                         color="success"), {"display": "block"}
-    except Exception as e:
-        # Display error if connection or initialization fails
-        return dbc.Alert(f"Connection failed: {str(e)}", color="danger"), {"display": "none"}
+    if not os.path.exists(auto_model_path):
+        roster_str = ", ".join([f"'{k}': {v}" for k, v in roster_slots.items() if v > 0])
+        error_msg = (
+            f"Model not found for this draft configuration ({num_teams} teams, {num_rounds} rounds, Starters: {roster_slots['QB']} QB, {roster_slots['RB']} RB, {roster_slots['WR']} WR, {roster_slots['TE']} TE, {roster_slots['K']} K, {roster_slots['DST']} DST).\n"
+            f"Please train a model for this draft scenario as described in the ReadMe.\n"
+            f"\nBe sure to use the following settings in src/config.py:\n"
+            f"\nNUM_TEAMS = {num_teams},\n"
+            f"\nNUM_ROUNDS = {num_rounds},\n"
+            f"\nROSTER_SLOTS = {{{roster_str}}}"
+        )
+        return dash.no_update, dbc.Alert(dcc.Markdown(error_msg), color="danger"), {"display": "none"}, True
+
+    # Store the necessary data in the session.
+    session_data = {
+        'draft_id': draft_id,
+        'user_slot': int(slot),
+        'model_path': auto_model_path,
+        'num_teams': num_teams
+    }
+    
+    success_msg = dbc.Alert(f"Successfully connected to draft! Loaded draft agent configured for {num_teams} teams, {num_rounds} rounds, and with starters: {roster_slots['QB']} QB, {roster_slots['RB']} RB, {roster_slots['WR']} WR, {roster_slots['TE']} TE, {roster_slots['K']} K, {roster_slots['DST']} DST.",
+                         color="success")
+    
+    return session_data, success_msg, {"display": "block"}, False # Enable interval on success
+
 
 @app.callback(
     [Output("status-pick-info", "children"),
@@ -222,25 +220,21 @@ def connect_draft(n_clicks, draft_id, slot):
      Output("rec-alternatives", "children"),
      Output("table-available", "children"),
      Output("table-roster", "children")],
-    [Input("interval-component", "n_intervals")]
+    [Input("interval-component", "n_intervals")],
+    [State("session-data", "data")]
 )
-def update_dashboard(n):
+def update_dashboard(n, session_data):
     """
     Callback triggered periodically by the dcc.Interval component.
-    This is the main update loop of the dashboard, responsible for:
-    1. Polling the Sleeper API for the latest draft state.
-    2. Calculating the current draft status (round, pick number, who is on the clock).
-    3. Getting a draft recommendation from the agent for the current team on the clock.
-    4. Generating and updating all the UI components (status, recommendation, tables).
-    
-    :param n: The number of times the interval has fired.
-    :return: A tuple of updated children for the respective Output components.
+    This is the main update loop of the dashboard.
     """
-    global manager, user_slot, num_teams
-    
-    # If manager is not initialized, do nothing
-    if not manager:
+    if not session_data:
         return dash.no_update
+
+    # Use the memoized function to get the manager instance.
+    manager = load_draft_manager(session_data['draft_id'], session_data['model_path'])
+    user_slot = session_data['user_slot']
+    num_teams = session_data['num_teams']
 
     # Poll the API for the latest draft state
     manager.update_state()
