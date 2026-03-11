@@ -10,8 +10,8 @@ import torch
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # --- Draft Settings ---
-NUM_TEAMS = 12                              # Number of teams in the draft.
-NUM_ROUNDS = 16                             # Number of rounds in the draft.
+NUM_TEAMS = 10                              # Number of teams in the draft.
+NUM_ROUNDS = 15                             # Number of rounds in the draft.
 # Starting slots per position on each team
 ROSTER_SLOTS = {'QB':  1,
                 'RB':  2,
@@ -21,17 +21,17 @@ ROSTER_SLOTS = {'QB':  1,
                 'DST': 1
                 }
 # Index for replacement player cutoffs for VOR calculation.
-REPLACEMENT_CUTOFFS = {'QB': (NUM_TEAMS * ROSTER_SLOTS['QB']) // 2,
-                       'RB': (NUM_TEAMS * ROSTER_SLOTS['RB']) // 2,
-                       'WR': (NUM_TEAMS * ROSTER_SLOTS['WR']) // 2,
-                       'TE': (NUM_TEAMS * ROSTER_SLOTS['TE']) // 2,
-                       'K':  (NUM_TEAMS * ROSTER_SLOTS['K']) // 2,
-                       'DST':(NUM_TEAMS * ROSTER_SLOTS['DST']) // 2
+REPLACEMENT_CUTOFFS = {'QB': (NUM_TEAMS * ROSTER_SLOTS['QB']),
+                       'RB': (NUM_TEAMS * ROSTER_SLOTS['RB']),
+                       'WR': (NUM_TEAMS * ROSTER_SLOTS['WR']),
+                       'TE': (NUM_TEAMS * ROSTER_SLOTS['TE']),
+                       'K':  (NUM_TEAMS * ROSTER_SLOTS['K']),
+                       'DST':(NUM_TEAMS * ROSTER_SLOTS['DST'])
                        }
 # Max number of players per position before masking. This is up to user preference.
 ROSTER_LIMITS = {'QB':  ROSTER_SLOTS['QB'] * 2,
-                 'RB':  ROSTER_SLOTS['RB'] * 3,
-                 'WR':  ROSTER_SLOTS['WR'] * 3,
+                 'RB':  ROSTER_SLOTS['RB'] * 2.5,   # Recommended coefficient: 3 for 16 round, 2.5 for 15 round
+                 'WR':  ROSTER_SLOTS['WR'] * 2.5,   # Recommended coefficient: 3 for 16 round, 2.5 for 15 round
                  'TE':  ROSTER_SLOTS['TE'] * 2,
                  'K':   ROSTER_SLOTS['K'],
                  'DST': ROSTER_SLOTS['DST']
@@ -47,7 +47,7 @@ EMBED_DIM = 128                                     # Internal dimension for all
 NUM_HEADS = 8                                       # Number of attention heads. Must divide EMBED_DIM.
 
 # --- Training Settings ---
-NUM_ENVS = 50                                                       # Number of parallel environments. Lower for less than 32 GB RAM.
+NUM_ENVS = 25                                                       # Number of parallel environments. Lower for less than 32 GB RAM.
 LEARNING_PHASE_EPISODES = NUM_ENVS * 100                            # Number of drafts to decay LR and Entropy over
 REFINEMENT_PHASE_EPISODES = NUM_ENVS * 0                            # Number of drafts to refine exploitation strategy over
 MAX_EPISODES = LEARNING_PHASE_EPISODES + REFINEMENT_PHASE_EPISODES  # Total number of drafts to train on
