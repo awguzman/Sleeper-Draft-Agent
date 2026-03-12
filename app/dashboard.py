@@ -8,12 +8,8 @@ import dash
 from dash import dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
 import pandas as pd
-import sys
 import os
 import functools
-
-# Add project root to path to allow importing from `app` and `src`
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.sleeper import SleeperDraftManager, get_draft_metadata
 

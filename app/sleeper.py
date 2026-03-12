@@ -5,7 +5,7 @@ for the live dashboard.
 It acts as the backend, translating live draft data into a format the trained model can understand and then running
 inference to get a pick recommendation.
 """
-
+import re
 import requests
 import polars as pl
 import torch
@@ -69,8 +69,40 @@ class SleeperDraftManager:
         """
         self.draft_id = draft_id
         self.base_url = "https://api.sleeper.app/v1"
+
+        #  Parse model filename to get draft configuration
+        match = re.search(r'(\d+)team_(\d+)rounds_(\d+)QB_(\d+)RB_(\d+)WR_(\d+)TE_(\d+)K_(\d+)DST', model_path)
+        if not match:
+            print(f"Error: Could not parse model filename: {model_path}")
+            return
+
+        self.num_teams = int(match.group(1))
+        self.num_rounds = int(match.group(2))
+        self.roster_slots = {'QB': int(match.group(3)),
+                             'RB': int(match.group(4)),
+                             'WR': int(match.group(5)),
+                             'TE': int(match.group(6)),
+                             'K': int(match.group(7)),
+                             'DST': int(match.group(8))
+                             }
+
+        print(f"Loading model from {model_path}...")
+        self.device = torch.device("cpu")  # Use CPU for inference on dashboard
+        self.model = DraftAgent(
+            n_players_window=config.N_PLAYERS_WINDOW,
+            player_feat_dim=config.PLAYER_FEAT_DIM,
+            roster_feat_dim=self.num_teams * len(config.POSITIONS) + 1,
+            embed_dim=config.EMBED_DIM,
+            team_embed_dim=config.TEAM_EMBED_DIM
+        ).to(self.device)
+
+        # Load weights
+        state_dict = torch.load(model_path, map_location=self.device)
+        self.model.load_state_dict(state_dict)
+        self.model.eval()  # Set to evaluation mode for inference
+        print("Model loaded successfully.")
         
-        # Load and setup the Board with ID Mapping
+        # Load and set up the Board with ID Mapping
         print("Loading player board and ID mappings...")
         self.full_board = create_board(preprocess=True)
         self._map_ids()
@@ -78,26 +110,9 @@ class SleeperDraftManager:
         # Initialize State
         self.available_players = self.full_board.clone()
         self.rosters = [
-            {pos: [] for pos in config.POSITIONS} for _ in range(config.NUM_TEAMS)
+            {pos: [] for pos in config.POSITIONS} for _ in range(self.num_teams)
         ]
         self.current_pick_no = 0
-        
-        # Load the Model
-        print(f"Loading model from {model_path}...")
-        self.device = torch.device("cpu") # Use CPU for inference on dashboard
-        self.model = DraftAgent(
-            n_players_window=config.N_PLAYERS_WINDOW,
-            player_feat_dim=config.PLAYER_FEAT_DIM,
-            roster_feat_dim=config.ROSTER_FEAT_DIM,
-            embed_dim=config.EMBED_DIM,
-            team_embed_dim=config.TEAM_EMBED_DIM
-        ).to(self.device)
-        
-        # Load weights
-        state_dict = torch.load(model_path, map_location=self.device)
-        self.model.load_state_dict(state_dict)
-        self.model.eval() # Set to evaluation mode for inference
-        print("Model loaded successfully.")
 
     def _map_ids(self):
         """
@@ -143,7 +158,7 @@ class SleeperDraftManager:
         # Reset state to the original full board and empty rosters
         self.available_players = self.full_board.clone()
         self.rosters = [
-            {pos: [] for pos in config.POSITIONS} for _ in range(config.NUM_TEAMS)
+            {pos: [] for pos in config.POSITIONS} for _ in range(self.num_teams)
         ]
         
         for pick in picks:
@@ -161,7 +176,7 @@ class SleeperDraftManager:
                     row_dict = player_row.row(0, named=True)
                     
                     # Add PickNum for dashboard display, mimicking training format
-                    pick_in_round = ((pick['pick_no'] - 1) % config.NUM_TEAMS) + 1
+                    pick_in_round = ((pick['pick_no'] - 1) % self.num_teams) + 1
                     row_dict['PickNum'] = f"{pick['round']}.{str(pick_in_round).zfill(2)}"
 
                     pos = row_dict['Pos']
@@ -254,13 +269,13 @@ class SleeperDraftManager:
         # Roster features
         my_roster_counts = [float(len(self.rosters[team_idx][pos])) for pos in config.POSITIONS]
         opponent_roster_counts = []
-        for i in range(1, config.NUM_TEAMS):
-            opponent_idx = (team_idx + i) % config.NUM_TEAMS
+        for i in range(1, self.num_teams):
+            opponent_idx = (team_idx + i) % self.num_teams
             opponent_counts = [float(len(self.rosters[opponent_idx][pos])) for pos in config.POSITIONS]
             opponent_roster_counts.extend(opponent_counts)
             
         # Calculate Draft Progress
-        total_picks = config.NUM_TEAMS * config.NUM_ROUNDS
+        total_picks = self.num_teams * self.num_rounds
         progress = self.current_pick_no / total_picks
         
         # Append progress to roster features
@@ -270,10 +285,27 @@ class SleeperDraftManager:
         # Positional limits mask
         valid_action_mask = []
         my_current_counts = {pos: len(self.rosters[team_idx][pos]) for pos in config.POSITIONS}
-        
+
+        if self.num_rounds > 15:
+            roster_limits = {'QB': self.roster_slots['QB'] * 2,
+                             'RB': self.roster_slots['RB'] * 3,
+                             'WR': self.roster_slots['WR'] * 3,
+                             'TE': self.roster_slots['TE'] * 2,
+                             'K': self.roster_slots['K'],
+                             'DST': self.roster_slots['DST']
+                             }
+        else:
+            roster_limits = {'QB': self.roster_slots['QB'] * 2,
+                             'RB': self.roster_slots['RB'] * 2.5,
+                             'WR': self.roster_slots['WR'] * 2.5,
+                             'TE': self.roster_slots['TE'] * 2,
+                             'K': self.roster_slots['K'],
+                             'DST': self.roster_slots['DST']
+                             }
+
         for row in top_n_players.iter_rows(named=True):
             player_pos = row['Pos']
-            if player_pos in config.ROSTER_LIMITS and my_current_counts[player_pos] >= config.ROSTER_LIMITS[player_pos]:
+            if player_pos in roster_limits and my_current_counts[player_pos] >= roster_limits[player_pos]:
                 valid_action_mask.append(True)
             else:
                 valid_action_mask.append(False)
