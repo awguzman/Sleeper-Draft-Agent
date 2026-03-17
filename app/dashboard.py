@@ -3,7 +3,7 @@ This module defines the Dash application for the Sleeper Draft Agent dashboard.
 
 It acts as the front end, providing the user with a full on AI-based decision system.
 """
-
+import logging
 import dash
 from dash import dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
@@ -13,8 +13,16 @@ import functools
 
 from app.sleeper import SleeperDraftManager, get_draft_metadata
 
+# --- Configure Logging ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # --- App Initialization ---
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
+server = app.server
 app.title = "Sleeper Draft Agent"
 
 # --- Memoized Function for Manager Creation ---
@@ -25,7 +33,7 @@ def load_draft_manager(draft_id, model_path):
     This function is memoized to ensure that the expensive model loading
     and object creation only happens once per draft_id/model_path combination.
     """
-    print(f"--- Cache: Creating new manager for draft {draft_id} ---")
+    logger.info(f"Creating new draft manager for draft ID {draft_id} and loaded model {model_path}")
     return SleeperDraftManager(draft_id, model_path)
 
 # --- Markdown Content ---
@@ -167,6 +175,9 @@ def connect_draft(n_clicks, draft_id, slot):
     if not n_clicks:
         # Initial load, do nothing
         return dash.no_update, "", {"display": "none"}, True
+
+    # Log the attempt to load draft data
+    logger.info(f"Attempting to load league data for ID: {draft_id}")
     
     if not draft_id:
         return dash.no_update, dbc.Alert("Please enter a Draft ID.", color="danger"), {"display": "none"}, True
@@ -175,6 +186,7 @@ def connect_draft(n_clicks, draft_id, slot):
     metadata = get_draft_metadata(draft_id)
     
     if not metadata:
+        logger.error(f"Failed to fetch draft metadata for ID: {draft_id}")
         return dash.no_update, dbc.Alert("Could not fetch draft data from Sleeper. Please check the Draft ID.", color="danger"), {"display": "none"}, True
 
     num_teams = metadata['num_teams']
@@ -184,6 +196,7 @@ def connect_draft(n_clicks, draft_id, slot):
     auto_model_path = os.path.join("..", "src", "models", auto_model_name)
 
     if not os.path.exists(auto_model_path):
+        logger.warning(f"Model not found for this draft configuration ({num_teams} teams, {num_rounds} rounds, Starters: {roster_slots['QB']} QB, {roster_slots['RB']} RB, {roster_slots['WR']} WR, {roster_slots['TE']} TE, {roster_slots['K']} K, {roster_slots['DST']} DST)")
         roster_str = ", ".join([f"'{k}': {v}" for k, v in roster_slots.items() if v > 0])
         error_msg = (
             f"Model not found for this draft configuration ({num_teams} teams, {num_rounds} rounds, Starters: {roster_slots['QB']} QB, {roster_slots['RB']} RB, {roster_slots['WR']} WR, {roster_slots['TE']} TE, {roster_slots['K']} K, {roster_slots['DST']} DST).\n"
@@ -205,6 +218,7 @@ def connect_draft(n_clicks, draft_id, slot):
     
     success_msg = dbc.Alert(f"Successfully connected to draft! Loaded draft agent configured for {num_teams} teams, {num_rounds} rounds, and with starters: {roster_slots['QB']} QB, {roster_slots['RB']} RB, {roster_slots['WR']} WR, {roster_slots['TE']} TE, {roster_slots['K']} K, {roster_slots['DST']} DST.",
                          color="success")
+    logger.info(f"Successfully connected to draft ID {draft_id}")
     
     return session_data, success_msg, {"display": "block"}, False # Enable interval on success
 

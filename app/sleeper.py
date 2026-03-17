@@ -86,7 +86,6 @@ class SleeperDraftManager:
                              'DST': int(match.group(8))
                              }
 
-        print(f"Loading model from {model_path}...")
         self.device = torch.device("cpu")  # Use CPU for inference on dashboard
         self.model = DraftAgent(
             n_players_window=config.N_PLAYERS_WINDOW,
@@ -100,10 +99,8 @@ class SleeperDraftManager:
         state_dict = torch.load(model_path, map_location=self.device)
         self.model.load_state_dict(state_dict)
         self.model.eval()  # Set to evaluation mode for inference
-        print("Model loaded successfully.")
         
         # Load and set up the Board with ID Mapping
-        print("Loading player board and ID mappings...")
         self.full_board = create_board(preprocess=True)
         self._map_ids()
         
