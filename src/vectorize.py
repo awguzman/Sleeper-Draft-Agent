@@ -5,7 +5,7 @@ This module provides a vectorized wrapper for the DraftSimulator environment to 
 import torch
 from multiprocessing import Process, Pipe
 
-import config
+from src import config
 
 def worker(remote, parent_remote, env_fn):
     """

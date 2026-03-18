@@ -6,7 +6,7 @@ import polars as pl
 import torch
 
 from board import create_board
-import config
+from src import config
 
 class DraftSimulator:
     """

@@ -32,7 +32,7 @@ from draft import DraftSimulator
 from agent import DraftAgent
 from vectorize import VectorizedDraftSimulator
 from test import run_test_draft
-import config
+from src import config
 
 class Memory:
     """

@@ -5,7 +5,7 @@ This module is responsible for generating the draft board used to train the draf
 import polars as pl
 
 from nflreadpy import load_ff_rankings
-import config
+from src import config
 
 def create_board(preprocess: bool = False) -> pl.DataFrame:
     """
