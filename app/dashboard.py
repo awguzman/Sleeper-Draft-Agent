@@ -185,7 +185,11 @@ def connect_draft(n_clicks, draft_id, slot):
     
     if not draft_id:
         return dash.no_update, dbc.Alert("Please enter a Draft ID.", color="danger"), {"display": "none"}, True
-    
+
+    # Verify draft_id is a digit for security purposes
+    if not draft_id.isdigit():
+        return dash.no_update, dbc.Alert("Invalid Draft ID. Draft ID must be an integer.", color="danger"), {"display": "none"}, True
+
     # Try to auto-detect model from Draft Metadata
     metadata = get_draft_metadata(draft_id)
     
