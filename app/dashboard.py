@@ -77,7 +77,7 @@ app.layout = dbc.Container([
                     dbc.Input(id="input-draft-id", placeholder="Enter Draft ID...", type="text"),
                 ], width=6),
                 dbc.Col([
-                    dbc.Label("Your Draft Slot (1-12)"),
+                    dbc.Label("Your Draft Slot"),
                     dbc.Input(id="input-user-slot", placeholder="1", type="number", min=1, max=12, value=1),
                 ], width=3),
                 dbc.Col([
@@ -185,7 +185,11 @@ def connect_draft(n_clicks, draft_id, slot):
     
     if not draft_id:
         return dash.no_update, dbc.Alert("Please enter a Draft ID.", color="danger"), {"display": "none"}, True
-    
+
+    # Verify draft_id is a digit for security purposes
+    if not draft_id.isdigit():
+        return dash.no_update, dbc.Alert("Invalid Draft ID. Draft ID must be an integer.", color="danger"), {"display": "none"}, True
+
     # Try to auto-detect model from Draft Metadata
     metadata = get_draft_metadata(draft_id)
     
@@ -196,6 +200,16 @@ def connect_draft(n_clicks, draft_id, slot):
     num_teams = metadata['num_teams']
     num_rounds = metadata['num_rounds']
     roster_slots = metadata['roster_slots']
+
+    # Validate slot input
+    if not slot:
+        return dash.no_update, dbc.Alert(f"Invalid Draft Slot. It must be an integer between 1 and {num_teams}.", color="danger"), {"display": "none"}, True
+    if not slot.is_integer():
+        return dash.no_update, dbc.Alert(f"Invalid Draft Slot. It must be an integer between 1 and {num_teams}.",
+                                         color="danger"), {"display": "none"}, True
+    if not (1 <= slot <= num_teams):
+        return dash.no_update, dbc.Alert(f"Invalid Draft Slot. It must be an integer between 1 and {num_teams}", color="danger"), {"display": "none"}, True
+
     auto_model_name = f"draft_agent_{num_teams}team_{num_rounds}rounds_{roster_slots['QB']}QB_{roster_slots['RB']}RB_{roster_slots['WR']}WR_{roster_slots['TE']}TE_{roster_slots['K']}K_{roster_slots['DST']}DST.pth"
 
     auto_model_path = os.path.join(MODELS_DIR, auto_model_name)
