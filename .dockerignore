@@ -21,6 +21,8 @@ logs/
 # Ignore tests (if not needed in prod)
 tests/
 
-# Ignore local data dumps (if any)
+# Ignore local data dumps
 data/
 runs/
+src/runs/
+assets/
