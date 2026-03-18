@@ -13,37 +13,34 @@ An AI-powered fantasy football drafting assistant that learns optimal strategies
 
 ## Installation
 
-**1. Clone the Repository**
+**1. Clone the Repository:**
 ```bash
 git clone https://github.com/your-username/Sleeper-Draft-Agent.git
 cd Sleeper-Draft-Agent
 ```
 
-**2. Create a Virtual Environment (Recommended)**
+**2. Create a Virtual Environment (Recommended):**
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # On Windows, use: .venv\Scripts\activate
 ```
 
-**3. Install Dependencies**
+**3. Install Dependencies:**
 First, install the common packages from the `requirements.txt` file:
 ```bash
 pip install -r requirements.txt
 ```
 
-**4. Install PyTorch**
-Next, install the correct version of PyTorch for your system. Visit the [official PyTorch website](https://pytorch.org/get-started/locally/) to get the correct command for your setup. You can check your CUDA Version with `nvidia-smi` in the terminal.
+**3.5. (OPTIONAL) Install PyTorch with CUDA:**
+Next, install the correct version of PyTorch for your system if you have a Nvidia GPU and want to train models using hardware acceleration. Visit the [official PyTorch website](https://pytorch.org/get-started/locally/) to get the correct command for your setup. You can check your CUDA Version with `nvidia-smi` in the terminal.
 
 *   **For GPU (NVIDIA with CUDA):**
     ```bash
-    # Example for CUDA - use the command from the website!
-    pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+    # Example for CUDA version 13.0 - use the command from the website!
+    pip3 install torch --index-url https://download.pytorch.org/whl/cu130
     ```
 *   **For CPU-Only:**
-    ```bash
-    # Command for CPU-only
-    pip3 install torch torchvision torchaudio
-    ```
+Don't do anything as it's preinstalled in requirements.txt!
 
 ## Instructions
 
