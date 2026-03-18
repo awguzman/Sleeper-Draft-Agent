@@ -15,7 +15,7 @@ import sys
 import os
 
 # Add the project root to the path so we can import from src
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src import config
 from src.agent import DraftAgent

@@ -25,6 +25,10 @@ app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
 server = app.server
 app.title = "Sleeper Draft Agent"
 
+# --- Path Configuration ---
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+
 # --- Memoized Function for Manager Creation ---
 @functools.lru_cache(maxsize=10)
 def load_draft_manager(draft_id, model_path):
@@ -193,7 +197,8 @@ def connect_draft(n_clicks, draft_id, slot):
     num_rounds = metadata['num_rounds']
     roster_slots = metadata['roster_slots']
     auto_model_name = f"draft_agent_{num_teams}team_{num_rounds}rounds_{roster_slots['QB']}QB_{roster_slots['RB']}RB_{roster_slots['WR']}WR_{roster_slots['TE']}TE_{roster_slots['K']}K_{roster_slots['DST']}DST.pth"
-    auto_model_path = os.path.join("..", "src", "models", auto_model_name)
+
+    auto_model_path = os.path.join(MODELS_DIR, auto_model_name)
 
     if not os.path.exists(auto_model_path):
         logger.warning(f"Model not found for this draft configuration ({num_teams} teams, {num_rounds} rounds, Starters: {roster_slots['QB']} QB, {roster_slots['RB']} RB, {roster_slots['WR']} WR, {roster_slots['TE']} TE, {roster_slots['K']} K, {roster_slots['DST']} DST)")

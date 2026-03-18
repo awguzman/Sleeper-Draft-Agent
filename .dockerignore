@@ -18,11 +18,6 @@ logs/
 .vscode/
 .git/
 
-# Ignore tests (if not needed in prod)
-tests/
-
-# Ignore local data dumps
-data/
-runs/
-src/runs/
+# Ignore local data dumps/media
+models/runs
 assets/

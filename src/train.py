@@ -34,6 +34,11 @@ from vectorize import VectorizedDraftSimulator
 from test import run_test_draft
 from src import config
 
+# --- Path Configuration ---
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+RUNS_DIR = os.path.join(MODELS_DIR, "runs")
+
 class Memory:
     """
     A buffer for storing trajectories for PPO updates.
@@ -274,9 +279,9 @@ def train():
     print(f"Training on device: {config.DEVICE} for {config.MAX_EPISODES} drafts.")
     
     # --- Setup TensorBoard for logging ---
-    if not os.path.exists("runs"):
-        os.makedirs("runs")
-    log_dir = os.path.join("runs", "draft_experiment_" + datetime.now().strftime("%Y%m%d-%H%M%S"))
+    if not os.path.exists(RUNS_DIR):
+        os.makedirs(RUNS_DIR)
+    log_dir = os.path.join(RUNS_DIR, "draft_experiment_" + datetime.now().strftime("%Y%m%d-%H%M%S"))
     writer = SummaryWriter(log_dir=log_dir)
     print(f"TensorBoard logging to: {log_dir}")
     
@@ -326,8 +331,8 @@ def train():
     failsafe_count = 0
 
     # Create the models directory if it doesn't exist
-    if not os.path.exists("models"):
-        os.makedirs("models")
+    if not os.path.exists(MODELS_DIR):
+        os.makedirs(MODELS_DIR)
 
     # Reset environment to get initial state
     (roster_feats, player_feats, mask, team_idx) = vec_env.reset()
@@ -385,7 +390,7 @@ def train():
             
     # Save final model
     final_model_name = f"draft_agent_{config.NUM_TEAMS}team_{config.NUM_ROUNDS}rounds_{config.ROSTER_SLOTS['QB']}QB_{config.ROSTER_SLOTS['RB']}RB_{config.ROSTER_SLOTS['WR']}WR_{config.ROSTER_SLOTS['TE']}TE_{config.ROSTER_SLOTS['K']}K_{config.ROSTER_SLOTS['DST']}DST.pth"
-    final_model_path = os.path.join("models", final_model_name)
+    final_model_path = os.path.join(MODELS_DIR, final_model_name)
     torch.save(ppo_agent.policy.state_dict(), final_model_path)
     print(f"Training Complete. Final model saved at {final_model_path}")
 

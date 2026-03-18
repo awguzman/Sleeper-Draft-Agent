@@ -8,9 +8,6 @@ import os
 import sys
 import re
 
-# Add project root to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 from src import config
 from src.draft import DraftSimulator
 from src.agent import DraftAgent
@@ -120,11 +117,4 @@ def run_test_draft(model_path):
             player_names = [p['Player'] for p in players]
             count = len(players)
             print(f"  {pos} ({count}): {', '.join(player_names)}")
-
-if __name__ == "__main__":
-    model_path = 'models/draft_agent_12team_16rounds_1QB_2RB_2WR_1TE_1K_1DST.pth'
-    run_test_draft(model_path)
-
-    model_path = 'models/draft_agent_12team_15rounds_1QB_2RB_2WR_1TE_1K_1DST.pth'
-    run_test_draft(model_path)
 
