@@ -1,0 +1,26 @@
+# Ignore virtual environments
+venv/
+.venv/
+env/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore local logs
+logs/
+*.log
+
+# Ignore IDE settings
+.idea/
+.vscode/
+.git/
+
+# Ignore tests (if not needed in prod)
+tests/
+
+# Ignore local data dumps (if any)
+data/
+runs/
