@@ -304,6 +304,7 @@ def train():
     # --- Vectorize Environment ---
     vec_env = VectorizedDraftSimulator(env_fn=env_fn,
                                        num_envs=num_envs)
+    print(f"Vectorized training environment initialized. Running {num_envs} drafts in parallel.")
 
     # --- Initialize Agent and Memory ---
     ppo_agent = PPO(n_players_window=config.N_PLAYERS_WINDOW,
@@ -311,6 +312,9 @@ def train():
                     roster_feat_dim=config.ROSTER_FEAT_DIM,
                     embed_dim=config.EMBED_DIM)
     memory = Memory()
+
+    total_params = sum(p.numel() for p in ppo_agent.policy.parameters() if p.requires_grad)
+    print(f"Agent initialized. Total number of trainable parameters: {total_params}")
 
     # --- Training Loop ---
     running_rewards = np.zeros(num_envs)
@@ -328,6 +332,7 @@ def train():
     # Reset environment to get initial state
     (roster_feats, player_feats, mask, team_idx) = vec_env.reset()
 
+    print(f"Training started...")
     while total_episodes < config.MAX_EPISODES:
         # Collect a batch of experiences
         for _ in range(config.UPDATE_TIMESTEP // num_envs):
