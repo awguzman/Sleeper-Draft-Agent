@@ -10,6 +10,7 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 import os
 import functools
+import time
 
 from app.sleeper import SleeperDraftManager, get_draft_metadata
 
@@ -29,6 +30,10 @@ app.title = "Sleeper Draft Agent"
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
+# --- Global Rate Limiter Variables ---
+LAST_REQUEST_TIME = 0
+RATE_LIMIT_SECONDS = 2.0  # Allow 1 connection request every 2 seconds
+
 # --- Memoized Function for Manager Creation ---
 @functools.lru_cache(maxsize=10)
 def load_draft_manager(draft_id, model_path):
@@ -36,8 +41,10 @@ def load_draft_manager(draft_id, model_path):
     Creates and returns a SleeperDraftManager instance.
     This function is memoized to ensure that the expensive model loading
     and object creation only happens once per draft_id/model_path combination.
+
+    NOTE: maxsize is set to 10 assuming low user counts! May need to increase in the future.
     """
-    logger.info(f"Creating new draft manager for draft ID {draft_id} and loaded model {model_path}")
+    logger.info(f"Creating new draft manager for draft ID {draft_id}")
     return SleeperDraftManager(draft_id, model_path)
 
 # --- Markdown Content ---
@@ -176,9 +183,19 @@ def connect_draft(n_clicks, draft_id, slot):
 
     Validates the draft, finds the model, and saves session data to the dcc.Store.
     """
+    global LAST_REQUEST_TIME
+
     if not n_clicks:
         # Initial load, do nothing
         return dash.no_update, "", {"display": "none"}, True
+
+    current_time = time.time()
+    if current_time - LAST_REQUEST_TIME < RATE_LIMIT_SECONDS:
+        logger.warning(f"Rate limit hit. Request rejected for ID: {draft_id}")
+        return dash.no_update, dbc.Alert(f"Rate limit hit. Request rejected for ID: {draft_id}", color="danger"), {"display": "none"}, True
+
+    # Update the timestamp only if we are about to make an external API call
+    LAST_REQUEST_TIME = current_time
 
     # Log the attempt to load draft data
     logger.info(f"Attempting to load league data for ID: {draft_id}")
@@ -249,8 +266,8 @@ def connect_draft(n_clicks, draft_id, slot):
      Output("rec-alternatives", "children"),
      Output("table-available", "children"),
      Output("table-roster", "children")],
-    [Input("interval-component", "n_intervals")],
-    [State("session-data", "data")]
+    [Input("interval-component", "n_intervals"),
+     Input("session-data", "data")] # Trigger immediately on connection
 )
 def update_dashboard(n, session_data):
     """
@@ -266,6 +283,7 @@ def update_dashboard(n, session_data):
     num_teams = session_data['num_teams']
 
     # Poll the API for the latest draft state
+    logger.info(f"Updating draft state for ID: {session_data['draft_id']}")
     manager.update_state()
 
     # Calculate current draft status (round, pick, on-the-clock team)
