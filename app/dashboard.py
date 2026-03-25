@@ -11,6 +11,7 @@ import pandas as pd
 import os
 import functools
 import time
+import re
 
 from app.sleeper import SleeperDraftManager, get_draft_metadata
 
@@ -30,9 +31,40 @@ app.title = "Sleeper Draft Agent"
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
-# --- Global Rate Limiter Variables ---
+# --- Global Rate Limiter & Session Timeout Variables ---
 LAST_REQUEST_TIME = 0
 RATE_LIMIT_SECONDS = 2.0  # Allow 1 connection request every 2 seconds
+SESSION_TIMEOUT_MINUTES = 60 # Pause polling after 60 minutes
+
+# --- Helper Functions ---
+def get_available_models():
+    """
+    Scans the models directory and returns a list of available model configurations.
+    """
+    if not os.path.exists(MODELS_DIR):
+        return []
+    
+    available = []
+    for filename in os.listdir(MODELS_DIR):
+        if filename.endswith(".pth"):
+            available.append(translate_model(filename))
+    return available
+
+def translate_model(model: str):
+    """
+    Translates a model filename into a user-readable string.
+    """
+    num_teams = re.search(r'(\d+)team', model).group(1)
+    num_rounds = re.search(r'(\d+)rounds', model).group(1)
+    roster_slots = {'QB': re.search(r'(\d+)QB', model).group(1),
+                    'RB': re.search(r'(\d+)RB', model).group(1),
+                    'WR': re.search(r'(\d+)WR', model).group(1),
+                    'TE': re.search(r'(\d+)TE', model).group(1),
+                    'K': re.search(r'(\d+)K', model).group(1),
+                    'DST': re.search(r'(\d+)DST', model).group(1)
+                    }
+    translation =f"{num_teams} teams, {num_rounds} rounds with starters ({roster_slots['QB']}QB's, {roster_slots['RB']}RB's, {roster_slots['WR']}WR's, {roster_slots['TE']}TE's, {roster_slots['K']}K's, {roster_slots['DST']}DST's)"
+    return translation
 
 # --- Memoized Function for Manager Creation ---
 @functools.lru_cache(maxsize=10)
@@ -99,8 +131,16 @@ app.layout = dbc.Container([
     # Main Content Area (hidden until a successful connection is made)
     html.Div(id="main-content", style={"display": "none"}, children=[
         
-        # Interval component to trigger updates periodically
-        dcc.Interval(id="interval-component", interval=10000, n_intervals=0, disabled=True), # Initially disabled
+        # Interval component to trigger updates periodically (every 30 seconds)
+        dcc.Interval(id="interval-component", interval=30000, n_intervals=0, disabled=True), # Initially disabled
+
+        # Session Timeout/Resume Controls
+        dbc.Row([
+            dbc.Col(
+                html.Div(id="session-control-area", className="text-center my-2"),
+                width=12
+            )
+        ]),
 
         # Top Row: Live status and the agent's recommendation
         dbc.Row([
@@ -127,7 +167,7 @@ app.layout = dbc.Container([
                     ])
                 ], className="h-100 border-success")
             ], width=8),
-        ], className="mb-4"),
+        ]),
 
         # Bottom Row: Data tables for context
         dbc.Row([
@@ -227,29 +267,32 @@ def connect_draft(n_clicks, draft_id, slot):
     if not (1 <= slot <= num_teams):
         return dash.no_update, dbc.Alert(f"Invalid Draft Slot. It must be an integer between 1 and {num_teams}", color="danger"), {"display": "none"}, True
 
+    # Retrieve the model path for the detected model
     auto_model_name = f"draft_agent_{num_teams}team_{num_rounds}rounds_{roster_slots['QB']}QB_{roster_slots['RB']}RB_{roster_slots['WR']}WR_{roster_slots['TE']}TE_{roster_slots['K']}K_{roster_slots['DST']}DST.pth"
-
     auto_model_path = os.path.join(MODELS_DIR, auto_model_name)
 
+    # Error message for missing model
     if not os.path.exists(auto_model_path):
-        logger.warning(f"Model not found for this draft configuration ({num_teams} teams, {num_rounds} rounds, Starters: {roster_slots['QB']} QB, {roster_slots['RB']} RB, {roster_slots['WR']} WR, {roster_slots['TE']} TE, {roster_slots['K']} K, {roster_slots['DST']} DST)")
-        roster_str = ", ".join([f"'{k}': {v}" for k, v in roster_slots.items() if v > 0])
-        error_msg = (
-            f"Model not found for this draft configuration ({num_teams} teams, {num_rounds} rounds, Starters: {roster_slots['QB']} QB, {roster_slots['RB']} RB, {roster_slots['WR']} WR, {roster_slots['TE']} TE, {roster_slots['K']} K, {roster_slots['DST']} DST).\n"
-            f"Please train a model for this draft scenario as described in the ReadMe.\n"
-            f"\nBe sure to use the following settings in src/config.py:\n"
-            f"\nNUM_TEAMS = {num_teams},\n"
-            f"\nNUM_ROUNDS = {num_rounds},\n"
-            f"\nROSTER_SLOTS = {{{roster_str}}}"
-        )
-        return dash.no_update, dbc.Alert(dcc.Markdown(error_msg), color="danger"), {"display": "none"}, True
+        logger.warning(f"Model not found for this draft configuration: {auto_model_name}")
+        
+        available_models = get_available_models()
+        model_list = [html.Li(model) for model in available_models]
+        error_msg = html.Div([
+            f"Model not found for this draft configuration: {translate_model(auto_model_name)}.",
+            html.Br(),
+            "Models are available for the following draft scenarios:",
+            html.Ul(model_list)
+        ])
+
+        return dash.no_update, dbc.Alert(error_msg, color="danger"), {"display": "none"}, True
 
     # Store the necessary data in the session.
     session_data = {
         'draft_id': draft_id,
         'user_slot': int(slot),
         'model_path': auto_model_path,
-        'num_teams': num_teams
+        'num_teams': num_teams,
+        'last_active': time.time()
     }
     
     success_msg = dbc.Alert(f"Successfully connected to draft! Loaded draft agent configured for {num_teams} teams, {num_rounds} rounds, and with starters: {roster_slots['QB']} QB, {roster_slots['RB']} RB, {roster_slots['WR']} WR, {roster_slots['TE']} TE, {roster_slots['K']} K, {roster_slots['DST']} DST.",
@@ -265,17 +308,29 @@ def connect_draft(n_clicks, draft_id, slot):
      Output("rec-content", "children"),
      Output("rec-alternatives", "children"),
      Output("table-available", "children"),
-     Output("table-roster", "children")],
+     Output("table-roster", "children"),
+     Output("session-control-area", "children"),
+     Output("interval-component", "disabled", allow_duplicate=True)],
     [Input("interval-component", "n_intervals"),
-     Input("session-data", "data")] # Trigger immediately on connection
+     Input("session-data", "data")],#  Trigger immediately on connection
+     prevent_initial_call=True # Trigger immediately on connection
+
 )
 def update_dashboard(n, session_data):
     """
-    Callback triggered periodically by the dcc.Interval component.
+    Callback triggered by either the dcc.Interval component or a session data update.
     This is the main update loop of the dashboard.
     """
     if not session_data:
         return dash.no_update
+
+    # --- Session Timeout ---
+    last_active = session_data.get('last_active', 0)
+    if (time.time() - last_active) > (SESSION_TIMEOUT_MINUTES * 60):
+        logger.warning(f"Session for draft {session_data['draft_id']} timed out.")
+        pause_button = dbc.Button("Resume Polling", id="btn-resume", color="warning", className="w-50")
+        pause_message = dbc.Alert("Polling paused. Are you still Drafting?", color="warning", className="mt-2")
+        return dash.no_update, dash.no_update, pause_message, "", "", "", pause_button, True # Disable interval
 
     # Use the memoized function to get the manager instance.
     manager = load_draft_manager(session_data['draft_id'], session_data['model_path'])
@@ -307,7 +362,7 @@ def update_dashboard(n, session_data):
     recs = manager.get_recommendation(on_clock_idx, top_k=5)
     
     if not recs:
-        return status_text, clock_text, "No recommendations available.", "", "", ""
+        return status_text, clock_text, "No recommendations available.", "", "", "", "", False
 
     top_rec = recs[0]
     
@@ -356,7 +411,27 @@ def update_dashboard(n, session_data):
     else:
         table_roster = html.P("No players drafted yet.")
 
-    return status_text, clock_text, rec_display, alt_display, table_avail, table_roster
+    return status_text, clock_text, rec_display, alt_display, table_avail, table_roster, "", False
+
+@app.callback(
+    [Output("session-data", "data", allow_duplicate=True),
+     Output("session-control-area", "children", allow_duplicate=True),
+     Output("interval-component", "disabled", allow_duplicate=True)],
+    [Input("btn-resume", "n_clicks")],
+    [State("session-data", "data")],
+    prevent_initial_call=True
+)
+def resume_polling(n_clicks, session_data):
+    """
+    Resets the activity timestamp when the user clicks 'Resume'.
+    """
+    if not n_clicks or not session_data:
+        return dash.no_update
+    
+    logger.info(f"Resuming polling for draft {session_data['draft_id']}")
+    session_data['last_active'] = time.time()
+    return session_data, "", False
+
 
 if __name__ == '__main__':
     # Run the Dash application
