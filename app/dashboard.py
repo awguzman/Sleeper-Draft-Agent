@@ -149,9 +149,10 @@ app.layout = dbc.Container([
                 dbc.Card([
                     dbc.CardHeader("Draft Status"),
                     dbc.CardBody([
-                        html.H4(id="status-pick-info", className="card-title"),
+                        html.H3(id="status-pick-info", className="card-title"),
                         html.Hr(),
-                        html.H5(id="status-on-clock", className="text-warning"),
+                        html.H4(id="status-on-clock", className="text-warning"),
+                        html.H4(id='picks_away_info', className='text-warning')
                     ])
                 ], className="h-100")
             ], width=4),
@@ -307,6 +308,7 @@ def connect_draft(n_clicks, draft_id, slot):
 @app.callback(
     [Output("status-pick-info", "children"),
      Output("status-on-clock", "children"),
+     Output("picks_away_info", "children"),
      Output("rec-content", "children"),
      Output("rec-alternatives", "children"),
      Output("table-available", "children"),
@@ -314,13 +316,14 @@ def connect_draft(n_clicks, draft_id, slot):
      Output("session-control-area", "children"),
      Output("interval-component", "disabled", allow_duplicate=True)],
     [Input("interval-component", "n_intervals"),
-     Input("session-data", "data")],#  Trigger immediately on connection
-     prevent_initial_call=True # Trigger immediately on connection
+     Input("session-data", "data")], #  Trigger immediately on connection
+     prevent_initial_call=True
 
 )
 def update_dashboard(n, session_data):
     """
     Callback triggered by either the dcc.Interval component or a session data update.
+
     This is the main update loop of the dashboard.
     """
     if not session_data:
@@ -347,28 +350,43 @@ def update_dashboard(n, session_data):
     next_pick_num = manager.current_pick_no + 1
     current_round = ((next_pick_num - 1) // num_teams) + 1
     pick_in_round = (next_pick_num - 1) % num_teams
+    picks_away = 0
     
-    # Determine who is on the clock using snake draft logic
-    if current_round % 2 == 1:
+    # Determine who is on the clock and compute number of picks away from the user using snake draft logic
+    if current_round % 2 == 1: # slots: 1 -> num_teams
         on_clock_idx = pick_in_round
-    else:
+        if (on_clock_idx + 1) <= user_slot:
+            picks_away = user_slot - (on_clock_idx + 1)
+        else:
+            picks_away = (num_teams - (on_clock_idx + 1)) + (num_teams - user_slot)
+    else: # slots: num_teams -> 1
         on_clock_idx = num_teams - 1 - pick_in_round
+        if (on_clock_idx + 1) >= user_slot:
+            picks_away = (on_clock_idx + 1) - user_slot
+        else:
+            picks_away = (num_teams - (on_clock_idx + 1)) + user_slot
 
     # Create draft status text
     on_clock_slot = on_clock_idx + 1 # Convert to 1-indexed for display
     is_user_turn = (on_clock_slot == user_slot)
     
     status_text = f"Round {current_round} • Pick {next_pick_num} (Overall)"
+
     if str(on_clock_slot) in session_data['users']:
-        clock_text = f"On Clock: {session_data['users'][str(on_clock_slot)]}" + (" (YOU)" if is_user_turn else "")
+        clock_text = f"On the Clock: {session_data['users'][str(on_clock_slot)]}"
     else:
-        clock_text = f"On Clock: Team {on_clock_slot}" + (" (YOU)" if is_user_turn else "")
+        clock_text = f"On the Clock: Team {on_clock_slot}"
+
+    if is_user_turn:
+        away_text = "It is your turn to pick!"
+    else:
+        away_text = f"You are {picks_away} picks away from your next selection"
     
     # Get a recommendations from the agent for the current team on the clock
     recs = manager.get_recommendation(on_clock_idx, top_k=5)
     
     if not recs:
-        return status_text, clock_text, "No recommendations available.", "", "", "", "", False
+        return status_text, clock_text, away_text, "No recommendations available.", "", "", "", "", False
 
     top_rec = recs[0]
     
@@ -417,7 +435,7 @@ def update_dashboard(n, session_data):
     else:
         table_roster = html.P("No players drafted yet.")
 
-    return status_text, clock_text, rec_display, alt_display, table_avail, table_roster, "", False
+    return status_text, clock_text, away_text, rec_display, alt_display, table_avail, table_roster, "", False
 
 @app.callback(
     [Output("session-data", "data", allow_duplicate=True),
