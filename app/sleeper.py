@@ -9,13 +9,8 @@ import re
 import requests
 import polars as pl
 import torch
-import numpy as np
-from nflreadpy import load_ff_playerids
-import sys
-import os
 
-# Add the project root to the path so we can import from src
-# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from nflreadpy import load_ff_playerids
 
 from src import config
 from src.agent import DraftAgent
@@ -25,33 +20,47 @@ def get_draft_metadata(draft_id):
     """
     Fetches metadata for a specific draft from the Sleeper API.
 
-    This is used to match the given draft with the correct model for inference.
-
     :param draft_id: The ID of the Sleeper draft.
-    :return: A dictionary containing key draft settings, or None if the request fails.
+    :return: A dictionary containing key draft settings and information.
     """
-    url = f"https://api.sleeper.app/v1/draft/{draft_id}"
-    response = requests.get(url)
+    # --- Fetch Draft Settings ---
+    draft_url = f"https://api.sleeper.app/v1/draft/{draft_id}"
+    response = requests.get(draft_url)
     if response.status_code != 200:
-        print(f"Error fetching draft metadata: {response.status_code}")
         return None
     
-    data = response.json()
-    settings = data.get('settings', {})
+    draft_data = response.json()
+    draft_settings = draft_data.get('settings', {})
     
     # Extract relevant settings
     metadata = {
-        'num_teams': settings.get('teams'),
-        'num_rounds': settings.get('rounds'),
+        'num_teams': draft_settings.get('teams'),
+        'num_rounds': draft_settings.get('rounds'),
         'roster_slots': {
-            'QB': settings.get('slots_qb', 0),
-            'RB': settings.get('slots_rb', 0),
-            'WR': settings.get('slots_wr', 0),
-            'TE': settings.get('slots_te', 0),
-            'K': settings.get('slots_k', 0),
-            'DST': settings.get('slots_def', 0) # Sleeper uses 'def' for DST
+            'QB': draft_settings.get('slots_qb', 0),
+            'RB': draft_settings.get('slots_rb', 0),
+            'WR': draft_settings.get('slots_wr', 0),
+            'TE': draft_settings.get('slots_te', 0),
+            'K': draft_settings.get('slots_k', 0),
+            'DST': draft_settings.get('slots_def', 0)
         }
     }
+
+    # --- Fetch Draft Users ---
+    users = {}
+
+    # Translate user ID's to Sleeper usernames
+    draft_users = draft_data.get('draft_order', {})
+    for user_id in draft_users.keys():
+        user_url = f'https://api.sleeper.app/v1/user/{user_id}'
+        user_response = requests.get(user_url)
+        if user_response.status_code != 200:
+            return None
+        user_data = user_response.json()
+        user_name = user_data['display_name']
+        users[draft_users[user_id]] =user_name
+
+    metadata['users'] = users
 
     return metadata
 

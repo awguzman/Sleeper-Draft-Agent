@@ -257,6 +257,7 @@ def connect_draft(n_clicks, draft_id, slot):
     num_teams = metadata['num_teams']
     num_rounds = metadata['num_rounds']
     roster_slots = metadata['roster_slots']
+    draft_users = metadata['users']
 
     # Validate slot input
     if not slot:
@@ -292,6 +293,7 @@ def connect_draft(n_clicks, draft_id, slot):
         'user_slot': int(slot),
         'model_path': auto_model_path,
         'num_teams': num_teams,
+        'users': draft_users,
         'last_active': time.time()
     }
     
@@ -351,12 +353,16 @@ def update_dashboard(n, session_data):
         on_clock_idx = pick_in_round
     else:
         on_clock_idx = num_teams - 1 - pick_in_round
-        
+
+    # Create draft status text
     on_clock_slot = on_clock_idx + 1 # Convert to 1-indexed for display
     is_user_turn = (on_clock_slot == user_slot)
     
     status_text = f"Round {current_round} • Pick {next_pick_num} (Overall)"
-    clock_text = f"On Clock: Team {on_clock_slot}" + (" (YOU)" if is_user_turn else "")
+    if str(on_clock_slot) in session_data['users']:
+        clock_text = f"On Clock: {session_data['users'][str(on_clock_slot)]}" + (" (YOU)" if is_user_turn else "")
+    else:
+        clock_text = f"On Clock: Team {on_clock_slot}" + (" (YOU)" if is_user_turn else "")
     
     # Get a recommendations from the agent for the current team on the clock
     recs = manager.get_recommendation(on_clock_idx, top_k=5)
