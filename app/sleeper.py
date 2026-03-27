@@ -169,7 +169,6 @@ class SleeperDraftManager:
         
         for pick in picks:
             sleeper_id = pick['metadata'].get('player_id')
-            # In mock drafts, roster_id can be None, so we rely on draft_slot
             draft_slot = pick['draft_slot']
             team_idx = draft_slot - 1 # 0-indexed in our logic
             

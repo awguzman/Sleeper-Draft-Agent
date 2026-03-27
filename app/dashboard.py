@@ -3,15 +3,19 @@ This module defines the Dash application for the Sleeper Draft Agent dashboard.
 
 It acts as the front end, providing the user with a full on AI-based decision system.
 """
-import logging
+
+# --- Dash Imports
 import dash
 from dash import dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
+
+# --- Other Imports ---
 import pandas as pd
 import os
 import functools
 import time
 import re
+import logging
 
 from app.sleeper import SleeperDraftManager, get_draft_metadata
 
@@ -54,15 +58,18 @@ def translate_model(model: str):
     """
     Translates a model filename into a user-readable string.
     """
-    num_teams = re.search(r'(\d+)team', model).group(1)
-    num_rounds = re.search(r'(\d+)rounds', model).group(1)
-    roster_slots = {'QB': re.search(r'(\d+)QB', model).group(1),
-                    'RB': re.search(r'(\d+)RB', model).group(1),
-                    'WR': re.search(r'(\d+)WR', model).group(1),
-                    'TE': re.search(r'(\d+)TE', model).group(1),
-                    'K': re.search(r'(\d+)K', model).group(1),
-                    'DST': re.search(r'(\d+)DST', model).group(1)
+    match = re.search(r'(\d+)team_(\d+)rounds_(\d+)QB_(\d+)RB_(\d+)WR_(\d+)TE_(\d+)K_(\d+)DST', model)
+
+    num_teams = match.group(1)
+    num_rounds = match.group(2)
+    roster_slots = {'QB': match.group(3),
+                    'RB': match.group(4),
+                    'WR': match.group(5),
+                    'TE': match.group(6),
+                    'K': match.group(7),
+                    'DST': match.group(8)
                     }
+
     translation =f"{num_teams} teams, {num_rounds} rounds with starters ({roster_slots['QB']}QB's, {roster_slots['RB']}RB's, {roster_slots['WR']}WR's, {roster_slots['TE']}TE's, {roster_slots['K']}K's, {roster_slots['DST']}DST's)"
     return translation
 
@@ -244,7 +251,7 @@ def connect_draft(n_clicks, draft_id, slot):
     if not draft_id:
         return dash.no_update, dbc.Alert("Please enter a Draft ID.", color="danger"), {"display": "none"}, True
 
-    # Verify draft_id is a digit for security purposes
+    # Verify draft_id is a digit
     if not draft_id.isdigit():
         return dash.no_update, dbc.Alert("Invalid Draft ID. Draft ID must be an integer.", color="danger"), {"display": "none"}, True
 
