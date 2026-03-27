@@ -4,18 +4,21 @@ This module defines the Dash application for the Sleeper Draft Agent dashboard.
 It acts as the front end, providing the user with a full on AI-based decision system.
 """
 
-# --- Dash Imports
+# --- Dash Imports ---
+import logging
 import dash
 from dash import dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
+import plotly.graph_objects as go
+import plotly.express as px
 
 # --- Other Imports ---
+import config
 import pandas as pd
 import os
 import functools
 import time
 import re
-import logging
 
 from app.sleeper import SleeperDraftManager, get_draft_metadata
 
@@ -175,11 +178,11 @@ app.layout = dbc.Container([
                     ])
                 ], className="h-100 border-success")
             ], width=8),
-        ]),
+        ], className="mb-4"),
 
-        # Bottom Row: Data tables for context
+        # Bottom Row: Data tables and strength analysis
         dbc.Row([
-            # Agent's Window (Top Available Players)
+            # Top Available Players
             dbc.Col([
                 dbc.Card([
                     dbc.CardHeader(f"Top 25 Players Available"),
@@ -191,12 +194,28 @@ app.layout = dbc.Container([
 
             # User's Current Roster
             dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Your Roster"),
-                    dbc.CardBody([
-                        html.Div(id="table-roster")
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card([
+                            dbc.CardHeader("Your Roster"),
+                            dbc.CardBody([
+                                html.Div(id="table-roster")
+                            ])
+                        ])
                     ])
-                ])
+                ], className="mb-4"),
+
+            # Strength Analysis
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card([
+                            dbc.CardHeader("Team Strength Analysis"),
+                            dbc.CardBody([
+                                dcc.Graph(id="radar-strength-analysis", config={'displayModeBar': False})
+                            ])
+                        ])
+                    ])
+                ], className="mb-4")
             ], width=6),
         ]),
         
@@ -320,6 +339,7 @@ def connect_draft(n_clicks, draft_id, slot):
      Output("rec-alternatives", "children"),
      Output("table-available", "children"),
      Output("table-roster", "children"),
+     Output("radar-strength-analysis", "figure"),
      Output("session-control-area", "children"),
      Output("interval-component", "disabled", allow_duplicate=True)],
     [Input("interval-component", "n_intervals"),
@@ -342,7 +362,7 @@ def update_dashboard(n, session_data):
         logger.warning(f"Session for draft {session_data['draft_id']} timed out.")
         pause_button = dbc.Button("Resume Polling", id="btn-resume", color="warning", className="w-50")
         pause_message = dbc.Alert("Polling paused. Are you still Drafting?", color="warning", className="mt-2")
-        return dash.no_update, dash.no_update, pause_message, "", "", "", pause_button, True # Disable interval
+        return dash.no_update, dash.no_update, dash.no_update, pause_message, "", "", "", go.Figure(), pause_button, True # Disable interval
 
     # Use the memoized function to get the manager instance.
     manager = load_draft_manager(session_data['draft_id'], session_data['model_path'])
@@ -393,36 +413,89 @@ def update_dashboard(n, session_data):
     recs = manager.get_recommendation(on_clock_idx, top_k=5)
     
     if not recs:
-        return status_text, clock_text, away_text, "No recommendations available.", "", "", "", "", False
-
-    top_rec = recs[0]
-    
-    # Format the top recommendation for display
-    rec_display = html.Div([
-        html.H2(top_rec['Player'], className="display-4"),
-        html.H4(f"{top_rec['Pos']} • {top_rec['Team']}"),
-        html.H5(f"Model Confidence: {top_rec['Confidence']:.1%}", className="text-success"),
-        dbc.Row([
-            dbc.Col(html.H5(f"ECR: {top_rec['ECR']:.2f}"), width=4),
-            dbc.Col(html.H5(f"Value: {top_rec['Value']:.2f}"), width=4),
-            dbc.Col(html.H5(f"VOR: {top_rec['VOR']:.2f}"), width=4),
-        ])
-    ])
-    
-    # Format the alternative options table
-    if len(recs) > 1:
-        df_alts = pd.DataFrame(recs[1:])
-        # Format confidence as percentage string
-        df_alts['Confidence'] = df_alts['Confidence'].apply(lambda x: f"{x:.1%}")
-        # Select columns
-        df_alts = df_alts[['Player', 'Pos', 'Team', 'ECR', 'VOR', 'Value', 'Confidence']]
-        
-        alt_display = html.Div([
-            html.H5("Alternative Options", className="mt-3"),
-            dbc.Table.from_dataframe(df_alts, striped=True, bordered=True, hover=True, size='sm', className="text-light small")
-        ])
+        rec_display = "No recommendations available."
+        alt_display = ""
     else:
-        alt_display = html.Div()
+        top_rec = recs[0]
+        # Format the top recommendation for display
+        rec_display = html.Div([
+            html.H2(top_rec['Player'], className="display-4"),
+            html.H4(f"{top_rec['Pos']} • {top_rec['Team']}"),
+            html.H5(f"Model Confidence: {top_rec['Confidence']:.1%}", className="text-success"),
+            dbc.Row([
+                dbc.Col(html.H5(f"ECR: {top_rec['ECR']:.2f}"), width=4),
+                dbc.Col(html.H5(f"Value: {top_rec['Value']:.2f}"), width=4),
+                dbc.Col(html.H5(f"VOR: {top_rec['VOR']:.2f}"), width=4),
+            ])
+        ])
+        
+        # Format the alternative options table
+        if len(recs) > 1:
+            df_alts = pd.DataFrame(recs[1:])
+            df_alts['Confidence'] = df_alts['Confidence'].apply(lambda x: f"{x:.1%}")
+            df_alts = df_alts[['Player', 'Pos', 'Team', 'ECR', 'VOR', 'Value', 'Confidence']]
+            
+            alt_display = html.Div([
+                html.H5("Alternative Options", className="mt-3"),
+                dbc.Table.from_dataframe(df_alts, striped=True, bordered=True, hover=True, size='sm', className="text-light small")
+            ])
+        else:
+            alt_display = html.Div()
+
+    # --- Strength Analysis Chart ---
+    team_magnitudes = manager.get_team_ranks()
+    user_magnitudes = team_magnitudes[user_slot - 1]
+    
+    # Construct DataFrame for figure
+    radar_data = []
+    for pos in config.POSITIONS:
+        mag = user_magnitudes[pos]
+        # Calculate Rank (1 is best, 12 is worst)
+        rank = (num_teams + 1) - mag if mag > 0 else 12
+        radar_data.append({
+            'Position': pos,
+            'Rank Magnitude': mag,
+            'Rank': rank
+        })
+    df_radar = pd.DataFrame(radar_data)
+    
+    # Create figure
+    radar_fig = px.line_polar(
+        df_radar, 
+        r='Rank Magnitude', 
+        theta='Position', 
+        line_close=True,
+        markers=True,
+        template='plotly_dark',
+        custom_data=['Rank']
+    )
+    
+    # Customizing the hover text
+    radar_fig.update_traces(
+        fill='toself', 
+        line_color='#28a745', 
+        marker=dict(size=10),
+        hovertemplate="<b>%{theta}</b><br>Rank: %{customdata[0]}<br>"
+    )
+
+    # Customize layout
+    radar_fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, num_teams],
+                showticklabels=False,
+                ticks=''
+            ),
+            bgcolor='rgba(0,0,0,0)'
+        ),
+        showlegend=False,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=40, r=40, t=40, b=40),
+        height=500,
+        font=dict(color='white')
+    )
 
     # Top Available Players Table
     top_n = manager.available_players.head(25)
@@ -442,7 +515,7 @@ def update_dashboard(n, session_data):
     else:
         table_roster = html.P("No players drafted yet.")
 
-    return status_text, clock_text, away_text, rec_display, alt_display, table_avail, table_roster, "", False
+    return status_text, clock_text, away_text, rec_display, alt_display, table_avail, table_roster, radar_fig, "", False
 
 @app.callback(
     [Output("session-data", "data", allow_duplicate=True),

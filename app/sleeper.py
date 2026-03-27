@@ -160,6 +160,8 @@ class SleeperDraftManager:
     def _rebuild_state(self, picks):
         """
         Rebuilds the rosters and available player pool from the list of picks.
+
+        We completely rebuild in case of commissioner edits during the draft.
         """
         # Reset state to the original full board and empty rosters
         self.available_players = self.full_board.clone()
@@ -243,6 +245,46 @@ class SleeperDraftManager:
                 recommendations.append(rec)
         
         return recommendations
+
+    def get_team_ranks(self):
+        """
+        Calculates the strength rank of every team for each position based on total player Value.
+        Rank 1 (best) is converted to magnitude self.num_teams (largest).
+        Rank self.num_teams (worst) is converted to magnitude 1 (smallest).
+
+        :return: A list of dictionaries, one for each team, containing their positional magnitudes.
+        """
+        # Calculate Value Sums per Team and Position
+        team_value_sums = []
+        for team_idx in range(self.num_teams):
+            team_sums = {pos: 0.0 for pos in config.POSITIONS}
+            for pos in config.POSITIONS:
+                players = self.rosters[team_idx].get(pos, [])
+                team_sums[pos] = sum([p['Value'] for p in players])
+            team_value_sums.append(team_sums)
+
+        # Calculate Ranks per Position
+        team_rankings = [{} for _ in range(self.num_teams)]
+
+        for pos in config.POSITIONS:
+            # Extract sums for this position across all teams
+            pos_sums = [team[pos] for team in team_value_sums]
+            
+            # Identify teams with 0 value
+            zero_mask = [val == 0.0 for val in pos_sums]
+            
+            # Rank teams with non-zero values
+            ranks = pl.Series(pos_sums, dtype=pl.Float64).rank(descending=True, method='min').to_list()
+            
+            for team_idx, rank in enumerate(ranks):
+                if zero_mask[team_idx]:
+                    # If value is 0, magnitude is 0
+                    team_rankings[team_idx][pos] = 0
+                else:
+                    # Magnitude = (NUM_TEAMS + 1) - rank
+                    team_rankings[team_idx][pos] = (self.num_teams + 1) - rank
+
+        return team_rankings
 
     def _build_tensors(self, team_idx):
         """
