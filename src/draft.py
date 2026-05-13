@@ -117,7 +117,7 @@ class DraftSimulator:
         self.available_players = self.available_players.filter(pl.col('fantasypros_id') != player_id)
 
         # 5. Calculate reward
-        alpha = 0.5     # Reduce this to make the agent prioritize ranking
+        alpha = 0.25     # Reduce this to make the agent prioritize ranking
         beta = 1        # Reduce this to make the agent prioritize positional scarcity
         reward = (alpha * player_vor) + (beta * player_value) + penalty
 

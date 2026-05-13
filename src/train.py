@@ -281,7 +281,7 @@ def train():
     # --- Setup TensorBoard for logging ---
     if not os.path.exists(RUNS_DIR):
         os.makedirs(RUNS_DIR)
-    log_dir = os.path.join(RUNS_DIR, "draft_experiment_" + datetime.now().strftime("%Y%m%d-%H%M%S"))
+    log_dir = os.path.join(RUNS_DIR, "draft_training_" + datetime.now().strftime("%Y%m%d-%H%M%S"))
     writer = SummaryWriter(log_dir=log_dir)
     print(f"TensorBoard logging to: {log_dir}")
     
@@ -289,7 +289,7 @@ def train():
     if not is_port_in_use(6006):
         try:
             print("Launching TensorBoard...")
-            subprocess.Popen(["tensorboard", "--logdir=runs", "--port=6006"], shell=True)
+            subprocess.Popen(["tensorboard", f"--logdir={RUNS_DIR}", "--port=6006"], shell=True)
             time.sleep(3)
             webbrowser.open("http://localhost:6006")
         except Exception as e:
