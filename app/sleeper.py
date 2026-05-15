@@ -130,7 +130,7 @@ class SleeperDraftManager:
         
         # Select relevant columns and ensure sleeper_id is a string to match API
         mapping_pl = ids_df.select(['sleeper_id', 'fantasypros_id']).with_columns(
-            pl.col('sleeper_id').cast(pl.Utf8)
+            pl.col('sleeper_id').cast(pl.String)
         )
 
         # Join with player board to add the 'sleeper_id' column

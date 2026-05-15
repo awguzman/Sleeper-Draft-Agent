@@ -51,6 +51,8 @@ def create_board(preprocess: bool = False) -> pl.DataFrame:
         'sd': 'Std'
     })
 
+    board_df = board_df.with_columns(pl.col('fantasypros_id').cast(pl.String))
+
     # Perform training preprocessing if requested.
     if preprocess:
         board_df = process_board(board_df)
