@@ -140,6 +140,15 @@ class SleeperDraftManager:
             how='left'
         )
 
+        # Defenses have null values for sleeper_id.
+        # We replace them with their associated 'Team' value as this is how the Sleeper API identifies them.
+        self.full_board = self.full_board.with_columns(
+            pl.when(pl.col('sleeper_id').is_null() & (pl.col('Pos') == 'DST'))
+            .then(pl.col('Team'))
+            .otherwise(pl.col('sleeper_id'))
+            .alias('sleeper_id')
+        )
+
     def update_state(self):
         """
         Polls the Sleeper API for the latest picks and updates the internal draft state.
